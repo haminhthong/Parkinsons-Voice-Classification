@@ -34,6 +34,7 @@ def test_empty_csv_is_rejected():
 
 def test_non_numeric_feature_is_rejected(frame):
     invalid = frame.copy()
+    invalid["MDVP:Fo(Hz)"] = invalid["MDVP:Fo(Hz)"].astype(object)
     invalid.loc[0, "MDVP:Fo(Hz)"] = "không phải số"
 
     with pytest.raises(ValueError, match="phải chứa dữ liệu số"):

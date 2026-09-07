@@ -1,8 +1,7 @@
-"""Module suy luận dự đoán từ tệp dữ liệu CSV đầu vào.
+"""Suy luận subject-level từ acoustic feature table.
 
-Nạp gói artifact mô hình đã hiệu chỉnh (`parkinsons_calibrated_pipeline.joblib`), kiểm tra schema
-tệp CSV đầu vào, tính toán xác suất dự đoán cho từng bản ghi âm và tự động gộp kết quả
-ở cấp độ bệnh nhân theo quy tắc đã được khóa từ OOF Train.
+Recording chỉ nhận một screening score. Decision threshold chỉ được áp dụng
+sau khi lấy median các recording score của cùng subject.
 """
 
 from __future__ import annotations
@@ -12,129 +11,165 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-from src.data import ID_COLUMN, ORIGINAL_FEATURES, SUBJECT_COLUMN, validate_dataframe
-from src.utils import normalize_aggregation, positive_class_probability
+from src.data import ID_COLUMN, SUBJECT_COLUMN, validate_dataframe
+from src.features import MODEL_FEATURES, ORIGINAL_FEATURES
+from src.utils import positive_class_probability
 
 DANGEROUS_CSV_PREFIXES = ("=", "+", "-", "@")
 
 
 def sanitize_csv_value(value: str) -> str:
-    """Chống tấn công CSV Formula Injection cho chuỗi xuất ra."""
-    val_str = str(value)
-    if val_str.startswith(DANGEROUS_CSV_PREFIXES):
-        return "'" + val_str
-    return val_str
+    """Bảo vệ giá trị text khi xuất CSV khỏi formula injection."""
+    value = str(value)
+    return "'" + value if value.startswith(DANGEROUS_CSV_PREFIXES) else value
 
 
 def load_bundle(path: str | Path) -> dict:
-    """Nạp gói artifact mô hình và kiểm tra các trường siêu dữ liệu bắt buộc."""
+    """Nạp artifact và kiểm tra exact model/feature contract trước khi predict."""
     filepath = Path(path)
     if not filepath.is_file():
         raise RuntimeError("Không tìm thấy model artifact.")
 
     bundle = joblib.load(filepath)
-    required = {"model", "feature_columns", "decision_threshold", "champion_name"}
+    required = {
+        "model",
+        "feature_columns",
+        "decision_threshold",
+        "aggregation",
+        "model_version",
+        "schema_version",
+    }
     missing = required.difference(bundle)
     if missing:
         raise ValueError(f"Artifact thiếu siêu dữ liệu bắt buộc: {sorted(missing)}")
+    if int(bundle["schema_version"]) != 2:
+        raise ValueError("Artifact không dùng schema version 2.")
+    if list(bundle["feature_columns"]) != MODEL_FEATURES:
+        raise ValueError("Artifact feature schema không khớp chính xác với runtime.")
+    if bundle["aggregation"] != "median":
+        raise ValueError("Artifact production phải khóa aggregation='median'.")
+    threshold = float(bundle["decision_threshold"])
+    if not 0 <= threshold <= 1:
+        raise ValueError("Artifact có decision threshold không hợp lệ.")
+
+    steps = getattr(bundle["model"], "named_steps", {})
+    if "scale" not in steps or "model" not in steps or "select" in steps:
+        raise ValueError("Artifact model phải có đúng StandardScaler và LogisticRegression.")
+    if steps["model"].__class__.__name__ != "LogisticRegression":
+        raise ValueError("Artifact production chỉ chấp nhận LogisticRegression.")
     return bundle
 
 
-def check_recording_ood(
+def _prepare_inference_frame(frame: pd.DataFrame) -> pd.DataFrame:
+    """Chuẩn hóa input 20/22 feature và tạo feature dẫn xuất nếu cần."""
+    if frame.empty:
+        raise ValueError("Dữ liệu suy luận không có bản ghi.")
+    if "status" in frame.columns:
+        raise ValueError("Input suy luận không được chứa nhãn huấn luyện 'status'.")
+    if ID_COLUMN not in frame.columns:
+        raise ValueError("Input suy luận bắt buộc có cột 'name'.")
+
+    allowed = set(ORIGINAL_FEATURES) | {ID_COLUMN, SUBJECT_COLUMN}
+    unknown = sorted(set(frame.columns).difference(allowed))
+    if unknown:
+        raise ValueError(f"Input chứa cột không thuộc feature contract: {unknown}")
+    missing_model = sorted(set(MODEL_FEATURES).difference(frame.columns))
+    if missing_model:
+        raise ValueError(f"Thiếu các feature mô hình bắt buộc: {missing_model}")
+
+    prepared = frame.copy()
+    if "Jitter:DDP" not in prepared:
+        prepared["Jitter:DDP"] = prepared["MDVP:RAP"] * 3.0
+    if "Shimmer:DDA" not in prepared:
+        prepared["Shimmer:DDA"] = prepared["Shimmer:APQ3"] * 3.0
+
+    validated = validate_dataframe(prepared, require_target=False, require_name=True)
+    supplied_subjects = frame.get(SUBJECT_COLUMN)
+    if supplied_subjects is not None:
+        expected = validated[SUBJECT_COLUMN].astype(str).reset_index(drop=True)
+        supplied = supplied_subjects.astype(str).reset_index(drop=True)
+        if not supplied.equals(expected):
+            raise ValueError("subject_id trong input không khớp quy tắc suy ra từ name.")
+    return validated
+
+
+def _training_ranges(bundle: dict) -> dict[str, tuple[float, float]]:
+    """Đọc training range từ metadata mới."""
+    ranges = bundle.get("training_feature_ranges", {})
+    return {str(column): (float(values[0]), float(values[1])) for column, values in ranges.items()}
+
+
+def check_recording_training_range(
     row: pd.Series,
     feature_ranges: dict[str, tuple[float, float]] | None,
 ) -> list[str]:
-    """Kiểm tra xem các giá trị đặc trưng trong bản ghi có nằm ngoài dải P1-P99 tập train không."""
+    """Phát cảnh báo khi feature nằm ngoài dải P1-P99 của training."""
     if not feature_ranges:
         return []
-
     warnings = []
-    for col, (p_low, p_high) in feature_ranges.items():
-        if col in row:
-            val = float(row[col])
-            if val < p_low or val > p_high:
-                warnings.append(
-                    f"FEATURE_OUTSIDE_TRAINING_RANGE: {col}={val:.4f} "
-                    f"nằm ngoài dải P1-P99 [{p_low:.4f}, {p_high:.4f}]"
-                )
+    for column, (lower, upper) in feature_ranges.items():
+        value = float(row[column])
+        if value < lower or value > upper:
+            warnings.append(
+                f"FEATURE_OUTSIDE_TRAINING_RANGE: {column}={value:.4f} "
+                f"ngoài [{lower:.4f}, {upper:.4f}]"
+            )
     return warnings
 
 
 def predict_records(frame: pd.DataFrame, bundle: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Thực hiện dự đoán bản ghi và gộp kết quả theo từng bệnh nhân kèm kiểm tra độ tin cậy."""
-    # Đảm bảo cột nhãn status (nếu có) bị loại bỏ khỏi luồng suy luận
-    inference_frame = frame.copy()
-    if "status" in inference_frame.columns:
-        inference_frame = inference_frame.drop(columns=["status"])
+    """Tính score recording và median subject score, không tạo recording decision."""
+    validated = _prepare_inference_frame(frame)
+    feature_columns = list(bundle["feature_columns"])
+    scores = positive_class_probability(bundle["model"], validated[feature_columns])
+    warning_lists = [
+        check_recording_training_range(row, _training_ranges(bundle))
+        for _, row in validated[feature_columns].iterrows()
+    ]
+    records = pd.DataFrame(
+        {
+            "recording_id": validated[ID_COLUMN].map(sanitize_csv_value),
+            SUBJECT_COLUMN: validated[SUBJECT_COLUMN].map(sanitize_csv_value),
+            "screening_score": scores,
+            "feature_warnings": warning_lists,
+        }
+    )
 
-    validated = validate_dataframe(inference_frame, require_target=False, require_name=True)
-
-    # Kiểm tra đảm bảo dữ liệu đầu vào chứa đủ 22 đặc trưng số của bộ UCI Parkinson's
-    missing = sorted(set(ORIGINAL_FEATURES).difference(validated.columns))
-    if missing:
-        raise ValueError(f"Thiếu các cột đặc trưng bắt buộc: {missing}")
-
-    feature_columns = bundle["feature_columns"]
-    feature_ranges = bundle.get("feature_p1_p99")
-    features = validated[feature_columns]
-    probabilities = positive_class_probability(bundle["model"], features)
+    minimum_recordings = int(
+        bundle.get(
+            "training_min_recordings",
+            bundle.get("training_recordings_per_subject", {}).get("min", 1),
+        )
+    )
     threshold = float(bundle["decision_threshold"])
-
-    # Xây dựng kết quả mức bản ghi
-    records = validated[[ID_COLUMN, SUBJECT_COLUMN]].copy()
-    records[ID_COLUMN] = records[ID_COLUMN].map(sanitize_csv_value)
-    records[SUBJECT_COLUMN] = records[SUBJECT_COLUMN].map(sanitize_csv_value)
-    records["probability_status_1"] = probabilities
-    records["predicted_status"] = (probabilities >= threshold).astype(int)
-
-    # Kiểm tra OOD cho từng bản ghi
-    record_warnings: list[list[str]] = []
-    for _, row in validated[feature_columns].iterrows():
-        record_warnings.append(check_recording_ood(row, feature_ranges))
-    records["warnings"] = record_warnings
-
-    # Đọc quy tắc gộp xác suất từ artifact ('max', 'mean', 'median')
-    aggregation = normalize_aggregation(bundle.get("probability_aggregation", "mean"))
-
-    # Gom nhóm theo từng bệnh nhân
     subject_rows = []
-    for subject_id, group in records.groupby(SUBJECT_COLUMN):
-        n_rec = len(group)
-        prob = float(group["probability_status_1"].agg(aggregation))
-        flag = bool(prob >= threshold)
-        pred_status = int(flag)
-        pos_recs = int(group["predicted_status"].sum())
-
-        sub_warnings = []
-        # Chính sách số lượng bản ghi tối thiểu
-        if n_rec < 3:
-            sub_warnings.append(
-                f"ONLY_ONE_RECORDING: Đối tượng chỉ có {n_rec} bản ghi âm; "
-                "độ tin cậy gộp xác suất bị hạn chế (khuyến nghị >= 3 bản ghi)"
+    for subject_id, group in records.groupby(SUBJECT_COLUMN, sort=True):
+        subject_score = float(group["screening_score"].median())
+        warnings = [
+            warning for warning_list in group["feature_warnings"] for warning in warning_list
+        ]
+        if len(group) < minimum_recordings:
+            warnings.insert(
+                0,
+                f"INSUFFICIENT_RECORDINGS: subject có {len(group)} recording; "
+                f"training minimum là {minimum_recordings}",
             )
-
-        # Tổng hợp cảnh báo OOD từ các bản ghi con
-        all_rec_warnings = [w for w_list in group["warnings"] for w in w_list]
-        sub_warnings.extend(sorted(set(all_rec_warnings)))
-
-        reliability = "limited" if len(sub_warnings) > 0 else "standard"
-
+        warnings = list(dict.fromkeys(warnings))
         subject_rows.append(
             {
-                SUBJECT_COLUMN: subject_id,
-                "n_recordings": n_rec,
-                "probability_status_1": prob,
-                "screening_score": prob,
-                "predicted_status": pred_status,
-                "screening_flag": flag,
-                "positive_record_predictions": pos_recs,
-                "reliability": reliability,
-                "warnings": "; ".join(sub_warnings) if sub_warnings else "none",
+                "subject_id": subject_id,
+                "n_recordings": int(len(group)),
+                "subject_screening_score": subject_score,
+                "decision_threshold": threshold,
+                "screening_result": (
+                    "model-positive" if subject_score >= threshold else "model-negative"
+                ),
+                "reliability": "limited" if warnings else "standard",
+                "warnings": warnings,
+                "model_version": str(bundle["model_version"]),
             }
         )
-
-    subjects = pd.DataFrame(subject_rows)
-    return records, subjects
+    return records, pd.DataFrame(subject_rows)
 
 
 def predict_subject_records(
@@ -142,51 +177,29 @@ def predict_subject_records(
     recordings: list[dict[str, float]],
     bundle: dict,
 ) -> dict:
-    """Suy luận sàng lọc mức bệnh nhân từ danh sách các bản ghi đặc trưng dạng cấu trúc JSON.
-
-    Args:
-        subject_id: Định danh bệnh nhân / đối tượng.
-        recordings: Danh sách các bản ghi âm (mỗi dict chứa 20 hoặc 22 đặc trưng âm học).
-        bundle: Gói artifact mô hình đã tải.
-
-    Returns:
-        dict: Báo cáo sàng lọc đối tượng gồm điểm nguy cơ, cờ sàng lọc, cảnh báo và độ tin cậy.
-    """
+    """Sàng lọc một subject từ 1..N recording, không nhận training label."""
+    subject_id = str(subject_id).strip()
+    if not subject_id:
+        raise ValueError("subject_id không được để trống.")
     if not recordings:
         raise ValueError("Danh sách recordings không được để trống.")
+    if any("status" in recording for recording in recordings):
+        raise ValueError("Input suy luận không được chứa nhãn huấn luyện 'status'.")
 
-    # Xây dựng DataFrame tạm từ danh sách bản ghi
     frame = pd.DataFrame(recordings)
-    # Loại bỏ nhãn nếu có truyền nhầm
-    if "status" in frame.columns:
-        frame = frame.drop(columns=["status"])
-
+    frame[ID_COLUMN] = [f"{subject_id}_{index + 1}" for index in range(len(frame))]
     frame[SUBJECT_COLUMN] = subject_id
-    frame[ID_COLUMN] = [f"{subject_id}_{i+1}" for i in range(len(recordings))]
-
-    # Bổ sung các đặc trưng dẫn xuất nếu thiếu
-    for feat in ORIGINAL_FEATURES:
-        if feat not in frame.columns:
-            if feat == "Jitter:DDP" and "MDVP:RAP" in frame.columns:
-                frame["Jitter:DDP"] = frame["MDVP:RAP"] * 3.0
-            elif feat == "Shimmer:DDA" and "Shimmer:APQ3" in frame.columns:
-                frame["Shimmer:DDA"] = frame["Shimmer:APQ3"] * 3.0
-            else:
-                raise ValueError(f"Thiếu đặc trưng bắt buộc: '{feat}'")
-
     records, subjects = predict_records(frame, bundle)
-    sub = subjects.iloc[0]
-
-    warnings_list = [w.strip() for w in str(sub["warnings"]).split("; ") if w and w != "none"]
-
+    subject = subjects.iloc[0]
     return {
         "subject_id": subject_id,
-        "screening_score": float(sub["screening_score"]),
-        "screening_flag": bool(sub["screening_flag"]),
-        "reliability": str(sub["reliability"]),
-        "warnings": warnings_list,
-        "aggregation": bundle.get("probability_aggregation", "mean"),
-        "decision_threshold": float(bundle["decision_threshold"]),
-        "n_recordings": int(sub["n_recordings"]),
-        "record_probabilities": records["probability_status_1"].tolist(),
+        "n_recordings": int(subject["n_recordings"]),
+        "subject_screening_score": float(subject["subject_screening_score"]),
+        "decision_threshold": float(subject["decision_threshold"]),
+        "screening_result": str(subject["screening_result"]),
+        "reliability": str(subject["reliability"]),
+        "warnings": list(subject["warnings"]),
+        "model_version": str(subject["model_version"]),
+        "aggregation": "median",
+        "recording_scores": records["screening_score"].astype(float).tolist(),
     }

@@ -1,7 +1,7 @@
-"""Module tạo báo cáo audit về rò rỉ dữ liệu khi phân chia ngẫu nhiên ở cấp bản ghi (Naive Record Split).
+"""Audit dữ liệu và thí nghiệm minh họa record-level leakage.
 
-Thực hiện phân chia bản ghi ngẫu nhiên (ngược với phân chia theo bệnh nhân), huấn luyện mô hình
-và ghi lại tỷ lệ rò rỉ bệnh nhân giữa train và test cùng độ chính xác cao ảo (overoptimistic accuracy).
+Dataset audit là bước bắt buộc trước khi huấn luyện. Naive split chỉ được giữ
+như một experiment để minh họa vì nó không phải giao thức đánh giá hợp lệ.
 """
 
 from __future__ import annotations
@@ -9,14 +9,69 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
-from src.data import TARGET_COLUMN, load_data
+from src.data import ID_COLUMN, ORIGINAL_FEATURES, SUBJECT_COLUMN, TARGET_COLUMN, load_data
 from src.features import MODEL_FEATURES
+from src.utils import sha256_file
 
 DATA_PATH = Path(__file__).parents[1] / "data" / "parkinsons.csv"
 ARTIFACT_DIR = Path(__file__).parents[1] / "artifacts"
+
+
+def _subject_class_distribution(frame: pd.DataFrame) -> dict[str, int]:
+    """Đếm số subject theo từng nhãn, không đếm số recording."""
+    return {
+        str(label): int(count)
+        for label, count in (
+            frame.groupby(SUBJECT_COLUMN)[TARGET_COLUMN].first().value_counts().sort_index().items()
+        )
+    }
+
+
+def build_data_manifest(frame: pd.DataFrame, data_path: str | Path) -> dict:
+    """Tạo manifest bất biến mô tả dataset và feature contract."""
+    recordings_per_subject = frame.groupby(SUBJECT_COLUMN).size()
+    duplicate_names = int(frame[ID_COLUMN].duplicated().sum())
+    duplicate_vectors = int(frame.duplicated(subset=ORIGINAL_FEATURES).sum())
+
+    return {
+        "dataset": "UCI Parkinsons",
+        "dataset_sha256": sha256_file(data_path),
+        "n_recordings": int(len(frame)),
+        "n_subjects": int(frame[SUBJECT_COLUMN].nunique()),
+        "subject_distribution": _subject_class_distribution(frame),
+        "source_features": len(ORIGINAL_FEATURES),
+        "model_features": len(MODEL_FEATURES),
+        "subject_id_rule": "drop_final_recording_suffix",
+        "dropped_features": ["Jitter:DDP", "Shimmer:DDA"],
+        "duplicate_recording_names": duplicate_names,
+        "duplicate_full_feature_vectors": duplicate_vectors,
+        "recordings_per_subject": {
+            "min": int(recordings_per_subject.min()),
+            "median": float(recordings_per_subject.median()),
+            "max": int(recordings_per_subject.max()),
+        },
+        "evaluation_protocol": "nested-stratified-subject-cv-4x3",
+    }
+
+
+def run_dataset_integrity_audit(
+    data_path: str | Path = DATA_PATH,
+    artifact_dir: str | Path = ARTIFACT_DIR,
+) -> dict:
+    """Kiểm tra schema và ghi ``data_manifest.json`` cho lần chạy hiện tại."""
+    frame = load_data(data_path)
+    manifest = build_data_manifest(frame, data_path)
+    output_dir = Path(artifact_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "data_manifest.json").write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    return manifest
 
 
 def run_naive_split_audit(
@@ -48,7 +103,6 @@ def run_naive_split_audit(
     accuracy = float(model.score(X_test, y_test))
 
     predictions = frame.loc[test_idx, ["name", "subject_id", TARGET_COLUMN]].copy()
-    predictions["predicted_status"] = model.predict(X_test)
     predictions["is_overlapping_subject"] = predictions["subject_id"].isin(overlapping)
 
     audit_metrics = {

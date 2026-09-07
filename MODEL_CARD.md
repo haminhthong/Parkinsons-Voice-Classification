@@ -3,9 +3,9 @@
 ## 1. Model Overview & Positioning
 
 - **Model Name:** Parkinson’s Voice Feature Screening Pipeline (Leakage-Aware Prototype)
-- **Version:** `1.2.0`
-- **Model Architecture:** `StandardScaler` $\to$ `SelectKBest(k=10, f_classif)` $\to$ `KNeighborsClassifier(n_neighbors=9, p=1, weights='distance')` with Group-Aware Sigmoid Calibration (`CalibratedClassifierCV`) and Subject-Level `median` Aggregation.
-- **Input Scope:** 22 pre-extracted tabular acoustic voice features (fundamental frequency, jitter, shimmer, harmonic-to-noise ratios, nonlinear dynamical measures) from sustained phonation `/a/` (UCI Parkinsons).
+- **Version:** `1.0.0`
+- **Model Architecture:** `StandardScaler` $\to$ L2 `LogisticRegression` with fixed Subject-Level `median` Aggregation.
+- **Input Scope:** 20 model features derived from 22 pre-extracted tabular acoustic voice features from sustained phonation `/a/` (UCI Parkinsons).
 - **Audio Limitation:** **The model does NOT process raw audio files (WAV, MP3, FLAC).** It operates strictly as a tabular acoustic feature screening model.
 
 ---
@@ -13,8 +13,8 @@
 ## 2. Intended Use & Clinical Boundaries
 
 ### ✅ Intended Uses:
-- **Academic & Portfolio Research:** Demonstrating leakage-aware validation architectures, patient-level stratification, out-of-fold calibration, and cluster bootstrap uncertainty on grouped biomedical tabular data.
-- **Experimental Screening Signal:** Generating continuous risk scores (`screening_score`) and categorical screening flags (`model-positive`, `model-negative`) under explicit research caveats.
+- **Academic & Portfolio Research:** Demonstrating leakage-aware validation, patient-level stratification, nested CV and subject bootstrap uncertainty on grouped biomedical tabular data.
+- **Experimental Screening Signal:** Generating recording `screening_score` values and a subject-level `model-positive` or `model-negative` result under explicit research caveats.
 
 ### ❌ Non-Intended Uses:
 - **NOT a Medical Diagnostic System:** The model cannot diagnose Parkinson’s Disease or replace neurological examination, dopamine transporter imaging (DaTscan), or clinical motor scoring (MDS-UPDRS).
@@ -28,9 +28,9 @@
 - **Dataset Source:** [UCI Machine Learning Repository: Parkinsons Telemonitoring / Voice Dataset](https://archive.ics.uci.edu/dataset/174/parkinsons).
 - **Cohort Size:** 195 acoustic recordings from **32 distinct subjects** (24 diagnosed with Parkinson's Disease, 8 Healthy Controls). Each subject provided 5–6 sustained vowel phonations.
 - **Data Partitioning (Zero-Leakage Invariant):**
-  - **Training Cohort:** 24 subjects (18 PD, 6 Control) $\to$ 147 recordings.
-  - **Holdout Test Cohort:** 8 subjects (6 PD, 2 Control) $\to$ 48 recordings.
-  - **Constraint:** Complete subject isolation ($\text{Train Subjects} \cap \text{Holdout Subjects} = \emptyset$). No recordings from the same individual cross split boundaries.
+- **Evaluation Cohort:** All 32 subjects are used by nested 4-fold outer CV; each subject is outer-test exactly once.
+- **Inner Selection:** Three subject-level inner folds tune only `C` and `class_weight`.
+- **Constraint:** A subject never crosses train/validation boundaries inside an outer or inner fold.
 
 ---
 
@@ -43,57 +43,53 @@
 2. SUBJECT IDENTITY & SCHEMA AUDIT
    Schema validation, subject_id extraction, remove algebraic redundancies (Jitter:DDP, Shimmer:DDA)
           ↓
-3. PATIENT-LEVEL HOLDOUT SPLIT
-   24 Train Subjects / 8 Independent Holdout Subjects (Stratified, Zero Leakage)
+3. NESTED PATIENT-LEVEL CROSS-VALIDATION
+   4 Outer Folds × 3 Inner Folds (32 Subjects, Zero Leakage)
           ↓
-4. MODEL DEVELOPMENT INSIDE TRAIN
-   Subject-Stratified Folds → Fold-Safe Pipeline (Scaler → SelectKBest → Classifier)
+4. MODEL DEVELOPMENT INSIDE OUTER TRAIN
+   Subject-Stratified Inner Folds → StandardScaler → Logistic Regression
           ↓
-5. ROBUST MODEL SELECTION
-   Nested Subject-Level CV with Stability & Simplicity Guardrails (tie-breaker for equal F1)
+5. FIXED MODEL CONFIGURATION
+   Only C and class_weight are selected; production architecture stays logistic
           ↓
-6. PROBABILITY & DECISION LAYER
-   Group-Aware Sigmoid Calibration → OOF Probabilities → Aggregation (median) → OOF Threshold Optimization
+6. SCORE & DECISION LAYER
+   Recording scores → median per subject → threshold from outer-train OOF
           ↓
-7. FINAL HOLDOUT EVALUATION
-   Single Evaluation on 8 Unseen Subjects → Metrics + Patient-Cluster Bootstrap 95% CI (2,000x)
+7. CROSSFITTED EVALUATION
+   32 Cross-Fitted Subject Predictions → Metrics + Subject Bootstrap 95% CI (5,000x)
           ↓
 8. SERVING & RELIABILITY LAYER
-   FastAPI & Streamlit → P1-P99 OOD Range Checks → Minimum Recordings Policy (<3 recordings flagged)
+   FastAPI & Streamlit → training-range warning → INSUFFICIENT_RECORDINGS
 ```
 
 ---
 
 ## 5. Performance Metrics & Statistical Uncertainty
 
-### ⚠️ Critical Sample Size & Holdout Caveats
-The independent holdout cohort contains only **8 patients (6 PD, 2 Healthy Controls)**.
-- **Specificity = 0.50** corresponds to correctly identifying only **1 out of 2 control individuals**.
-- **ROC-AUC = 1.00** on 8 subjects is a descriptive sample statistic, not conclusive proof of flawless discrimination.
-- **Expected Calibration Error (ECE = 0.0513 with 5 bins)** on 8 subjects is purely descriptive due to sparse sample counts per bin.
-- **Nested Cross-Validation** on 24 subjects reveals substantial uncertainty ($F_1\text{-macro} = 0.519 \pm 0.328$, Balanced Accuracy = 0.608) and provides a much more honest and conservative indication of expected real-world generalization than the holdout point estimate alone.
+### ⚠️ Critical Sample Size Caveat
+The dataset contains only **32 subjects (24 positive, 8 control)**. Cross-fitted
+metrics and bootstrap intervals are internal research estimates with high
+variance, not clinical validation. There is no external patient cohort.
 
 ### Performance Summary Table
 
 | Evaluation Layer | Cohort | F1-Macro | Balanced Accuracy | Sensitivity | Specificity | ROC-AUC | Brier Score |
 | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Inner Model Search** | 24 Train Subjects (5-Fold CV) | 0.7270 | 0.7500 | 0.8889 | 0.6000 | 0.9000 | — |
-| **Nested Subject CV** | 24 Train Subjects (5 Outer $\times$ 3 Inner) | 0.5190 ± 0.328 | 0.6083 | 0.6444 | 0.5722 | 0.6333 | 0.1893 |
-| **Final Holdout Point Estimate** | 8 Unseen Subjects | 0.7949 | 0.7500 | 1.0000 | 0.5000 | 1.0000 | 0.1124 |
-| **Patient-Cluster Bootstrap 95% CI** | 8 Unseen Subjects (2,000 replicates) | **[0.385, 1.000]** | **[0.500, 1.000]** | **[1.000, 1.000]** | **[0.000, 1.000]** | **[1.000, 1.000]** | **[0.034, 0.269]** |
+| **Nested Subject CV** | 32 subjects (4 Outer × 3 Inner) | generated in `artifacts/metrics.json` | generated | generated | generated | generated | generated |
+| **Subject Bootstrap 95% CI** | 32 cross-fitted subjects (5,000 replicates) | see `artifacts/evaluation/bootstrap_ci.csv` | see artifact | see artifact | see artifact | see artifact | see artifact |
 
 ---
 
-## 6. Serving Guardrails & Out-of-Distribution Policy
+## 6. Serving Guardrails & Training-Range Policy
 
 To prevent silent failures and deceptive predictions during inference, the serving runtime incorporates three automated guardrails:
 
-1. **P1–P99 Feature Distribution Checks:**
-   During training, the 1st and 99th percentiles ($P_1, P_{99}$) of all 20 modeling features are recorded. If any input feature falls outside $[P_1, P_{99}]$, the system emits a `FEATURE_OUTSIDE_TRAINING_RANGE` warning and marks subject reliability as `"limited"`.
+1. **P1–P99 Feature Range Checks:**
+   During training, the 1st and 99th percentiles ($P_1, P_{99}$) of all 20 modeling features are recorded. If any input feature falls outside $[P_1, P_{99}]$, the system emits a `FEATURE_OUTSIDE_TRAINING_RANGE` warning and marks subject reliability as `"limited"`. This is a plausibility warning, not an OOD detector.
 2. **Minimum Recordings Policy:**
-   Because training subjects contributed 5–6 recordings each, computing subject aggregations on $<3$ recordings carries elevated variance. When fewer than 3 recordings are supplied, the system issues an `ONLY_ONE_RECORDING` warning and classifies reliability as `"limited"`.
+   The minimum is read from the training distribution and stored in the artifact. When fewer recordings are supplied, the system issues `INSUFFICIENT_RECORDINGS` and classifies reliability as `"limited"`.
 3. **Training Label Rejection:**
-   The inference API schema (`POST /predict/subject`) specifies `extra = "forbid"` and actively rejects payloads containing the training target `status` with a `422 Unprocessable Entity` status.
+   The canonical inference API (`POST /v1/screen/subject`) rejects payloads containing the training target `status` with a `422 Unprocessable Entity` status.
 
 ---
 

@@ -1,40 +1,73 @@
 {
   "dataset": {
-    "records": 195,
-    "subjects": 32,
-    "features_original": 22,
-    "features_model": 20
+    "dataset": "UCI Parkinsons",
+    "dataset_sha256": "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6",
+    "n_recordings": 195,
+    "n_subjects": 32,
+    "subject_distribution": {
+      "0": 8,
+      "1": 24
+    },
+    "source_features": 22,
+    "model_features": 20,
+    "subject_id_rule": "drop_final_recording_suffix",
+    "dropped_features": [
+      "Jitter:DDP",
+      "Shimmer:DDA"
+    ],
+    "duplicate_recording_names": 0,
+    "duplicate_full_feature_vectors": 0,
+    "recordings_per_subject": {
+      "min": 6,
+      "median": 6.0,
+      "max": 7
+    },
+    "evaluation_protocol": "nested-stratified-subject-cv-4x3"
   },
   "selection": {
-    "unit": "subject",
-    "primary_metric": "F1-macro",
-    "champion": "KNN + sigmoid calibration"
+    "C": 0.01,
+    "class_weight": "balanced"
   },
   "nested_cv_subject": {
-    "F1-macro mean": 0.5190476190476191,
-    "F1-macro std": 0.3283297938273943,
-    "Balanced Accuracy mean": 0.6083333333333333,
-    "ROC-AUC mean": 0.6333333333333333
-  },
-  "holdout_subject": {
-    "Accuracy": 0.875,
-    "Balanced Accuracy": 0.75,
-    "Precision": 0.8571428571428571,
-    "Recall/Sensitivity": 1.0,
+    "Accuracy": 0.6875,
+    "Balanced Accuracy": 0.625,
+    "Precision": 0.8181818181818182,
+    "Recall/Sensitivity": 0.75,
     "Specificity": 0.5,
-    "F1-macro": 0.7948717948717949,
-    "ROC-AUC": 1.0,
-    "Brier score": 0.11238035518798335,
-    "ECE (5 bins)": 0.05130513857372418
+    "NPV": 0.4,
+    "F1-macro": 0.6135265700483092,
+    "ROC-AUC": 0.7395833333333333,
+    "Brier score": 0.21462450560246463,
+    "fold_mean": {
+      "Balanced Accuracy": 0.625,
+      "F1-macro": 0.5870629370629371,
+      "ROC-AUC": 0.75
+    },
+    "fold_std": {
+      "Balanced Accuracy": 0.15023130314433286,
+      "F1-macro": 0.13159179156242765,
+      "ROC-AUC": 0.15590239111558088
+    }
   },
-  "calibration": {
-    "method": "sigmoid",
-    "aggregation": "median",
-    "threshold": 0.7499999999999999
+  "deployment_oof": {
+    "Accuracy": 0.8125,
+    "Balanced Accuracy": 0.8333333333333333,
+    "Precision": 0.95,
+    "Recall/Sensitivity": 0.7916666666666666,
+    "Specificity": 0.875,
+    "NPV": 0.5833333333333334,
+    "F1-macro": 0.7818181818181817,
+    "ROC-AUC": 0.875,
+    "Brier score": 0.20014339554667712,
+    "ECE (5 bins)": 0.27497968338873324,
+    "decision_threshold": 0.4206085668611331,
+    "aggregation": "median"
   },
-  "reproducibility": {
-    "random_state": 42,
-    "data_sha256": "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6",
-    "sklearn_version": "1.5.2"
-  }
+  "evaluation_protocol": {
+    "outer_folds": 4,
+    "inner_folds": 3,
+    "unit": "subject",
+    "primary_metric": "Balanced Accuracy"
+  },
+  "artifact": "releases/v1.0.0/model.joblib"
 }

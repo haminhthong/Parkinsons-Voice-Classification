@@ -1,9 +1,10 @@
-"""Module đánh giá mô hình phân loại và tính toán chỉ số y tế.
+"""Đánh giá leakage-aware ở cấp độ subject.
 
 Cung cấp các hàm tạo phân chia K-Fold theo bệnh nhân, tính toán chỉ số hiệu năng
 (Sensitivity/Recall, Specificity, Balanced Accuracy, F1-Macro, ROC-AUC, Brier score, ECE),
-gộp dự đoán theo bệnh nhân, tìm ngưỡng tối ưu trên Out-Of-Fold (OOF) và tính khoảng tin cậy
-95% CI bằng phương pháp Patient Cluster Bootstrap.
+gộp score theo subject, tìm ngưỡng thống kê trên OOF và tính khoảng tin cậy
+95% bằng subject bootstrap. Không có metric nào trong module này nên được gọi
+là clinical validation.
 """
 
 from __future__ import annotations
@@ -47,8 +48,14 @@ def make_subject_folds(
         ValueError: Nếu số bệnh nhân ở lớp ít nhất không đủ để tạo `n_splits` fold.
         AssertionError: Nếu phát hiện rò rỉ bệnh nhân hoặc validation fold thiếu 1 lớp.
     """
+    if n_splits < 2:
+        raise ValueError("n_splits phải từ 2 trở lên.")
+
     subject_table = build_subject_table(frame).reset_index(drop=True)
     class_counts = subject_table[TARGET_COLUMN].value_counts()
+
+    if len(class_counts) != 2:
+        raise ValueError("Dataset phải có đúng hai lớp subject: 0 và 1.")
 
     if class_counts.min() < n_splits:
         raise ValueError(
@@ -178,17 +185,17 @@ def calculate_clinical_likelihood_ratios(
     return {"LR+": lr_pos, "LR-": lr_neg}
 
 
-
 def aggregate_subject_predictions(
     frame: pd.DataFrame,
     probabilities: np.ndarray,
     *,
     threshold: float = 0.5,
-    aggregation: str = "mean",
+    aggregation: str = "median",
 ) -> pd.DataFrame:
-    """Gộp xác suất các bản ghi của cùng một bệnh nhân thành dự đoán mức bệnh nhân.
+    """Gộp recording scores thành score và decision ở cấp subject.
 
-    Hỗ trợ 3 quy tắc gộp xác suất: 'mean' (trung bình), 'median' (trung vị), hoặc 'max' (lớn nhất).
+    Production v1 khóa ``median``. ``mean`` và ``max`` chỉ còn để tái hiện
+    experiment cũ, không được dùng để chọn cấu hình triển khai.
 
 
     Args:
@@ -204,12 +211,17 @@ def aggregate_subject_predictions(
         ValueError: Nếu tên quy tắc gộp không nằm trong danh sách hỗ trợ.
     """
     aggregation = normalize_aggregation(aggregation)
+    probabilities = np.asarray(probabilities, dtype=float)
+    if len(frame) != len(probabilities):
+        raise ValueError("Số recording và số score phải bằng nhau.")
+    if not np.isfinite(probabilities).all() or ((probabilities < 0) | (probabilities > 1)).any():
+        raise ValueError("Recording score phải hữu hạn và nằm trong [0, 1].")
 
     records = pd.DataFrame(
         {
             SUBJECT_COLUMN: frame[SUBJECT_COLUMN].to_numpy(),
             TARGET_COLUMN: frame[TARGET_COLUMN].to_numpy(),
-            "probability": np.asarray(probabilities, dtype=float),
+            "probability": probabilities,
         }
     )
 
@@ -227,7 +239,7 @@ def evaluate_subject_fold(
     validation_frame: pd.DataFrame,
     probabilities: np.ndarray,
     *,
-    aggregation: str = "mean",
+    aggregation: str = "median",
     threshold: float = 0.5,
 ) -> dict[str, float]:
     """Đánh giá một validation fold ở cấp độ bệnh nhân."""
@@ -248,26 +260,33 @@ def evaluate_subject_fold(
 def select_decision_threshold(
     subjects: pd.DataFrame,
     *,
-    minimum_specificity: float = 0.5,
+    minimum_specificity: float | None = None,
 ) -> tuple[float, pd.DataFrame]:
-    """Tìm ngưỡng quyết định tối ưu trên tập OOF của tập huấn luyện.
+    """Tìm ngưỡng thống kê tối ưu trên subject-level OOF.
 
-    Tối ưu Balanced Accuracy với ràng buộc Specificity >= minimum_specificity,
-    giúp giảm thiểu rủi ro báo động giả (False Alarm) trong chẩn đoán.
+    Mục tiêu canonical là Balanced Accuracy, không có ``minimum_specificity``
+    mang ý nghĩa lâm sàng. Tham số tùy chọn chỉ giữ để chạy lại experiment cũ.
 
     Args:
         subjects: DataFrame đã gộp dự đoán ở cấp độ bệnh nhân.
-        minimum_specificity: Mức độ đặc hiệu tối thiểu bắt buộc đạt được.
+        minimum_specificity: Ràng buộc legacy tùy chọn; production truyền ``None``.
 
     Returns:
         tuple[float, pd.DataFrame]: Ngưỡng tối ưu và bảng tìm kiếm ứng viên.
     """
 
+    y_true = subjects[TARGET_COLUMN].to_numpy(dtype=int)
     probabilities = subjects["probability"].to_numpy(dtype=float)
+    # ROC-AUC và Brier không phụ thuộc threshold; chỉ tính một lần cho cả bảng.
+    score_metrics = calculate_metrics(
+        y_true,
+        (probabilities >= 0.5).astype(int),
+        probabilities,
+    )
     candidates = np.unique(
         np.concatenate(
             [
-                np.linspace(0.05, 0.95, 181),
+                np.linspace(0.0, 1.0, 201),
                 probabilities,
             ]
         )
@@ -275,14 +294,40 @@ def select_decision_threshold(
     rows = []
     for threshold in candidates:
         prediction = (probabilities >= threshold).astype(int)
-        metrics = calculate_metrics(subjects["status"], prediction, probabilities)
-        rows.append({"Threshold": float(threshold), **metrics})
+        tn = int(np.count_nonzero((y_true == 0) & (prediction == 0)))
+        fp = int(np.count_nonzero((y_true == 0) & (prediction == 1)))
+        fn = int(np.count_nonzero((y_true == 1) & (prediction == 0)))
+        tp = int(np.count_nonzero((y_true == 1) & (prediction == 1)))
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        specificity = tn / (tn + fp) if tn + fp else 0.0
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        npv = tn / (tn + fn) if tn + fn else 0.0
+        f1_positive = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0.0
+        f1_negative = 2 * tn / (2 * tn + fp + fn) if 2 * tn + fp + fn else 0.0
+        rows.append(
+            {
+                "Threshold": float(threshold),
+                "Accuracy": float(np.mean(y_true == prediction)),
+                "Balanced Accuracy": (recall + specificity) / 2,
+                "Precision": precision,
+                "Recall/Sensitivity": recall,
+                "Specificity": specificity,
+                "NPV": npv,
+                "F1-macro": (f1_positive + f1_negative) / 2,
+                "ROC-AUC": score_metrics["ROC-AUC"],
+                "Brier score": score_metrics["Brier score"],
+            }
+        )
 
     table = pd.DataFrame(rows)
     # Lọc danh sách ứng viên thỏa mãn chỉ tiêu Specificity tối thiểu
-    eligible = table[table["Specificity"] >= minimum_specificity]
-    if eligible.empty:
-        eligible = table
+    eligible = table
+    if minimum_specificity is not None:
+        if not 0 <= minimum_specificity <= 1:
+            raise ValueError("minimum_specificity phải nằm trong [0, 1].")
+        constrained = table[table["Specificity"] >= minimum_specificity]
+        if not constrained.empty:
+            eligible = constrained
 
     # Xếp hạng ứng viên theo thứ tự ưu tiên: Balanced Accuracy -> F1-macro -> Specificity
     ranked = eligible.assign(distance_from_default=(eligible["Threshold"] - 0.5).abs()).sort_values(
@@ -324,16 +369,16 @@ def expected_calibration_error(y_true, probabilities, *, n_bins: int = 5) -> flo
 
 
 def bootstrap_subject_confidence_intervals(
-    subjects: pd.DataFrame, *, n_bootstrap: int = 2000, random_state: int = 42
+    subjects: pd.DataFrame, *, n_bootstrap: int = 5000, random_state: int = 42
 ) -> pd.DataFrame:
     """Ước lượng Khoảng Tin Cậy 95% (95% CI) bằng Patient Cluster Bootstrap.
 
-    Thực hiện lấy mẫu có hoàn lại 2,000 lần ở cấp độ bệnh nhân. loại các mẫu
+    Thực hiện lấy mẫu có hoàn lại 5,000 lần ở cấp độ subject. Loại các mẫu
     bootstrap không hợp lệ (mẫu chỉ chứa duy nhất 1 lớp nhãn).
 
     Args:
         subjects: DataFrame kết quả dự đoán của từng bệnh nhân.
-        n_bootstrap: Số lần lấy mẫu ngẫu nhiên (mặc định 2,000 lần).
+        n_bootstrap: Số lần lấy mẫu ngẫu nhiên (mặc định 5,000 lần).
         random_state: Seed ngẫu nhiên.
 
     Returns:
@@ -344,23 +389,58 @@ def bootstrap_subject_confidence_intervals(
         subjects["prediction"],
         subjects["probability"],
     )
+    if n_bootstrap < 1:
+        raise ValueError("n_bootstrap phải lớn hơn 0.")
+
+    # Bootstrap chỉ có 32 subject; dùng NumPy tránh tạo 5.000 DataFrame và gọi
+    # lại nhiều hàm sklearn trong vòng lặp, nhưng vẫn giữ nguyên công thức metric.
     rng = np.random.default_rng(random_state)
+    y_true = subjects["status"].to_numpy(dtype=int)
+    y_pred = subjects["prediction"].to_numpy(dtype=int)
+    y_score = subjects["probability"].to_numpy(dtype=float)
     samples: list[dict[str, float]] = []
 
-    for _ in range(n_bootstrap):
-        # Lấy mẫu có hoàn lại theo dòng bệnh nhân
-        sampled = subjects.iloc[rng.integers(0, len(subjects), size=len(subjects))]
-        if sampled["status"].nunique() != 2:
+    for sample_indices in rng.integers(0, len(subjects), size=(n_bootstrap, len(subjects))):
+        sampled_true = y_true[sample_indices]
+        if np.unique(sampled_true).size != 2:
             continue
+        sampled_pred = y_pred[sample_indices]
+        sampled_score = y_score[sample_indices]
+        tn = int(np.count_nonzero((sampled_true == 0) & (sampled_pred == 0)))
+        fp = int(np.count_nonzero((sampled_true == 0) & (sampled_pred == 1)))
+        fn = int(np.count_nonzero((sampled_true == 1) & (sampled_pred == 0)))
+        tp = int(np.count_nonzero((sampled_true == 1) & (sampled_pred == 1)))
+
+        recall = tp / (tp + fn) if tp + fn else 0.0
+        specificity = tn / (tn + fp) if tn + fp else 0.0
+        precision = tp / (tp + fp) if tp + fp else 0.0
+        npv = tn / (tn + fn) if tn + fn else 0.0
+        f1_positive = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0.0
+        f1_negative = 2 * tn / (2 * tn + fp + fn) if 2 * tn + fp + fn else 0.0
+        positive_scores = sampled_score[sampled_true == 1]
+        negative_scores = sampled_score[sampled_true == 0]
+        score_comparison = positive_scores[:, None] - negative_scores[None, :]
+        roc_auc = float(
+            (np.count_nonzero(score_comparison > 0) + 0.5 * np.count_nonzero(score_comparison == 0))
+            / score_comparison.size
+        )
         samples.append(
-            calculate_metrics(
-                sampled["status"],
-                sampled["prediction"],
-                sampled["probability"],
-            )
+            {
+                "Accuracy": float(np.mean(sampled_true == sampled_pred)),
+                "Balanced Accuracy": (recall + specificity) / 2,
+                "Precision": precision,
+                "Recall/Sensitivity": recall,
+                "Specificity": specificity,
+                "NPV": npv,
+                "F1-macro": (f1_positive + f1_negative) / 2,
+                "ROC-AUC": roc_auc,
+                "Brier score": float(np.mean((sampled_true - sampled_score) ** 2)),
+            }
         )
 
     distribution = pd.DataFrame(samples)
+    if distribution.empty:
+        raise ValueError("Bootstrap không tạo được mẫu có đủ hai lớp.")
     return pd.DataFrame(
         [
             {

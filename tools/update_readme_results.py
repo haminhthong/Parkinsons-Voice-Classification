@@ -106,6 +106,42 @@ def update_readme(check_only: bool = False) -> int:
     return 0
 
 
+def generate_results_markdown() -> str:
+    """Render kết quả canonical từ metrics.json và evaluation artifacts."""
+    metrics = json.loads((ARTIFACTS_DIR / "metrics.json").read_text(encoding="utf-8"))
+    nested = metrics.get("nested_cv_subject", {})
+    deployment = metrics.get("deployment_oof", {})
+    protocol = metrics.get("evaluation_protocol", {})
+    release_metadata_path = ARTIFACTS_DIR / "releases" / "v1.0.0" / "metadata.json"
+    release_metadata = (
+        json.loads(release_metadata_path.read_text(encoding="utf-8"))
+        if release_metadata_path.exists()
+        else {}
+    )
+    threshold = deployment.get(
+        "decision_threshold",
+        release_metadata.get("decision_threshold", "N/A"),
+    )
+    lines = [
+        "### Kết quả nested subject-level evaluation",
+        "",
+        f"- **Protocol:** `{protocol.get('outer_folds', 4)} outer × {protocol.get('inner_folds', 3)} inner`, unit=`{protocol.get('unit', 'subject')}`",
+        "- **Primary metric:** `Balanced Accuracy`",
+        f"- **Cross-fitted subjects:** `{metrics.get('dataset', {}).get('n_subjects', 'N/A')}`; mỗi subject xuất hiện đúng một lần.",
+        f"- **Pooled Balanced Accuracy:** `{nested.get('Balanced Accuracy', 0.0):.4f}`",
+        f"- **Pooled Macro-F1:** `{nested.get('F1-macro', 0.0):.4f}`",
+        f"- **Pooled ROC-AUC:** `{nested.get('ROC-AUC', 0.0):.4f}`",
+        "",
+        "### Deployment contract",
+        "",
+        "- `StandardScaler → L2 Logistic Regression` với `aggregation=median`.",
+        f"- `C={metrics.get('selection', {}).get('C', 'N/A')}`, `class_weight={metrics.get('selection', {}).get('class_weight', 'N/A')}`.",
+        f"- Full-data group-OOF threshold: `{threshold}`.",
+        "- Artifact được fit trên toàn bộ 32 subject sau khi protocol khóa; chưa có external cohort.",
+    ]
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Update README.md results section from artifacts.")
     parser.add_argument(

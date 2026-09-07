@@ -1,11 +1,9 @@
-"""Module trực quan hóa kết quả và sinh biểu đồ báo cáo.
+"""Trực quan hóa kết quả canonical và sinh biểu đồ báo cáo.
 
 Tự động đọc các tệp dữ liệu báo cáo từ thư mục `artifacts/` và xuất ra 4 biểu đồ hình ảnh
 dùng cho tài liệu minh họa (README.md / Portfolio / Presentation):
-1. `model_benchmark.png`: Biểu đồ so sánh F1-macro CV giữa các mô hình.
-2. `holdout_probabilities.png`: Biểu đồ xác suất dự đoán trên tập Holdout Test theo bệnh nhân.
-3. `feature_selection_stability.png`: Biểu đồ độ ổn định tần suất lựa chọn đặc trưng.
-4. `threshold_aggregation.png`: Biểu đồ đường quét ngưỡng quyết định và quy tắc gộp xác suất.
+Các tên file cũ vẫn được giữ để không hỏng liên kết README, nhưng nội dung
+được lấy từ nested subject CV, fixed feature contract và median aggregation.
 """
 
 from __future__ import annotations
@@ -51,41 +49,80 @@ def create_portfolio_figures(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Đọc dữ liệu từ artifact đã kiểm chứng
-    benchmark = pd.read_csv(artifact_dir / "model_benchmark.csv")
-    holdout = pd.read_csv(artifact_dir / "holdout_subject_predictions.csv")
-    stability = pd.read_csv(artifact_dir / "feature_selection_stability.csv")
-    threshold_search = pd.read_csv(artifact_dir / "oof_threshold_search.csv")
+    # Ưu tiên artifact canonical; fallback chỉ để tái tạo report lịch sử.
+    evaluation_dir = artifact_dir / "evaluation"
+    benchmark_path = evaluation_dir / "inner_selection.csv"
+    scores_path = evaluation_dir / "cross_fitted_subject_predictions.csv"
+    threshold_path = evaluation_dir / "threshold_search.csv"
+    benchmark = pd.read_csv(
+        benchmark_path if benchmark_path.exists() else artifact_dir / "model_benchmark.csv"
+    )
+    scores = pd.read_csv(
+        scores_path if scores_path.exists() else artifact_dir / "holdout_subject_predictions.csv"
+    )
+    threshold_search = pd.read_csv(
+        threshold_path if threshold_path.exists() else artifact_dir / "oof_threshold_search.csv"
+    )
+    stability_path = artifact_dir / "feature_selection_stability.csv"
+    stability = (
+        pd.read_csv(stability_path)
+        if not scores_path.exists() and stability_path.exists()
+        else pd.DataFrame(
+            {"Feature": ["20 model features (fixed contract)"], "Selection frequency": [1.0]}
+        )
+    )
+    if "Aggregation" not in threshold_search.columns:
+        threshold_search["Aggregation"] = "median"
     raw_metrics = json.loads((artifact_dir / "metrics.json").read_text(encoding="utf-8"))
-    decision_threshold = float(raw_metrics.get("calibration", {}).get("threshold", raw_metrics.get("decision_threshold", 0.5)))
+    release_metadata_path = artifact_dir / "releases" / "v1.0.0" / "metadata.json"
+    release_metadata = (
+        json.loads(release_metadata_path.read_text(encoding="utf-8"))
+        if release_metadata_path.exists()
+        else {}
+    )
+    decision_threshold = float(
+        release_metadata.get(
+            "decision_threshold",
+            raw_metrics.get("deployment_oof", {}).get("decision_threshold", 0.5),
+        )
+    )
 
     paths: list[Path] = []
 
-    # Biểu đồ 1: Benchmark các mô hình ứng viên
-    benchmark_plot = benchmark.sort_values("Subject F1-macro mean")
+    # Biểu đồ 1: So sánh cấu hình Logistic Regression trong inner OOF
     figure, axis = plt.subplots(figsize=(9, 5))
-    axis.errorbar(
-        benchmark_plot["Subject F1-macro mean"],
-        benchmark_plot["Model"],
-        xerr=benchmark_plot["Subject F1-macro std"],
-        fmt="o",
-        color="#1f5f8b",
-        ecolor="#9ecae1",
-        capsize=4,
-    )
-    axis.set(xlim=(0, 1), xlabel="F1-macro CV trung bình ± 1 độ lệch chuẩn")
-    axis.set_title("Benchmark không rò rỉ theo bệnh nhân")
+    if "Model" in benchmark.columns:
+        benchmark_plot = benchmark.sort_values("Subject F1-macro mean")
+        axis.errorbar(
+            benchmark_plot["Subject F1-macro mean"],
+            benchmark_plot["Model"],
+            xerr=benchmark_plot["Subject F1-macro std"],
+            fmt="o",
+            color="#1f5f8b",
+            ecolor="#9ecae1",
+            capsize=4,
+        )
+        axis.set(xlim=(0, 1), xlabel="F1-macro CV trung bình ± 1 độ lệch chuẩn")
+    else:
+        selection_plot = benchmark.sort_values("Balanced Accuracy")
+        labels = selection_plot.apply(
+            lambda row: f"C={row['C']}, weight={row['class_weight']}", axis=1
+        )
+        axis.barh(labels, selection_plot["Balanced Accuracy"], color="#1f5f8b")
+        axis.set(xlim=(0, 1), xlabel="Inner OOF Balanced Accuracy")
+    axis.set_title("Inner selection của Logistic Regression theo subject")
     axis.grid(axis="x", alpha=0.25)
     paths.append(output_dir / "model_benchmark.png")
     _save_figure(figure, paths[-1])
 
-    # Biểu đồ 2: Xác suất Holdout theo bệnh nhân
-    holdout_plot = holdout.sort_values("probability")
-    colors = holdout_plot["status"].map({0: "#2ca25f", 1: "#de2d26"})
+    # Biểu đồ 2: Cross-fitted score theo subject
+    score_column = "subject_score" if "subject_score" in scores.columns else "probability"
+    scores_plot = scores.sort_values(score_column)
+    colors = scores_plot["status"].map({0: "#2ca25f", 1: "#de2d26"})
     figure, axis = plt.subplots(figsize=(10, 5))
     axis.scatter(
-        holdout_plot["subject_id"],
-        holdout_plot["probability"],
+        scores_plot["subject_id"],
+        scores_plot[score_column],
         c=colors,
         s=85,
     )
@@ -97,10 +134,10 @@ def create_portfolio_figures(
     )
     axis.set(
         ylim=(0, 1),
-        xlabel="Bệnh nhân holdout",
-        ylabel="Điểm sàng lọc nguy cơ (status = 1)",
+        xlabel="Subject cross-fitted",
+        ylabel="Screening score",
     )
-    axis.set_title("Phân bố điểm sàng lọc Holdout theo bệnh nhân (8 đối tượng)")
+    axis.set_title("Cross-fitted screening score theo subject")
     axis.tick_params(axis="x", rotation=35)
     legend_items = [
         Line2D(
@@ -134,7 +171,7 @@ def create_portfolio_figures(
     paths.append(output_dir / "holdout_probabilities.png")
     _save_figure(figure, paths[-1])
 
-    # Biểu đồ 3: Độ ổn định khi chọn đặc trưng qua các fold
+    # Biểu đồ 3: Contract 20 đặc trưng cố định, không chạy feature selection
     stability_plot = stability.head(15).sort_values("Selection frequency")
     figure, axis = plt.subplots(figsize=(9, 6))
     axis.barh(
@@ -142,8 +179,8 @@ def create_portfolio_figures(
         stability_plot["Selection frequency"],
         color="#4c78a8",
     )
-    axis.set(xlim=(0, 1), xlabel="Tỷ lệ fold lựa chọn")
-    axis.set_title("Độ ổn định khi chọn đặc trưng (Uncertainty, không phải nhân quả sinh học)")
+    axis.set(xlim=(0, 1), xlabel="Tỷ lệ contract")
+    axis.set_title("Feature contract cố định (không phải feature selection)")
     axis.grid(axis="x", alpha=0.25)
     paths.append(output_dir / "feature_selection_stability.png")
     _save_figure(figure, paths[-1])

@@ -1,8 +1,8 @@
-"""Module xử lý dữ liệu giọng nói Parkinson.
+"""Nạp, kiểm tra schema và quản lý subject identity.
 
 Cung cấp các hàm kiểm tra tính hợp lệ của dữ liệu (schema validation), trích xuất mã bệnh nhân
 (subject_id) từ tên tệp ghi âm, và thực hiện phân chia tập dữ liệu ở cấp độ bệnh nhân
-(Patient-level holdout split) nhằm chống rò rỉ dữ liệu (Data Leakage).
+(Patient-level split) nhằm chống rò rỉ dữ liệu (Data Leakage).
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 from sklearn.model_selection import train_test_split
 
-# Định nghĩa tên các cột tiêu chuẩn trong bộ dữ liệu UCI Parkinson's
+# Tên cột tiêu chuẩn của bộ dữ liệu UCI Parkinsons.
 ID_COLUMN = "name"
 TARGET_COLUMN = "status"
 SUBJECT_COLUMN = "subject_id"
@@ -155,7 +155,8 @@ def load_data(path: str | Path) -> pd.DataFrame:
 def build_subject_table(frame: pd.DataFrame) -> pd.DataFrame:
     """Tạo bảng đại diện duy nhất 1 dòng cho mỗi bệnh nhân (`subject_id`).
 
-    Dùng để thực hiện phân chia Holdout và Cross-Validation chính xác ở cấp độ bệnh nhân.
+    Dùng để thực hiện phân chia và kiểm tra Cross-Validation ở cấp độ bệnh nhân.
+    Hàm holdout cũ vẫn được giữ để tương thích test/experiment; production dùng nested CV.
 
     Args:
         frame: DataFrame đầy đủ các bản ghi.

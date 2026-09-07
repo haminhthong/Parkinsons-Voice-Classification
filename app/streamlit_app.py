@@ -1,7 +1,7 @@
 """Giao diện Web ứng dụng Streamlit cho Phân loại Giọng nói Parkinson.
 
-Cho phép bác sĩ/nghiên cứu viên tải lên tệp CSV chứa 22 đặc trưng âm thanh,
-hiển thị bảng kết quả dự đoán ở cấp độ bản ghi và cấp độ bệnh nhân, biểu đồ xác suất
+Cho phép nghiên cứu viên tải lên CSV chứa 20 hoặc 22 đặc trưng âm thanh,
+hiển thị score recording và decision ở cấp độ subject, biểu đồ score
 và cho phép xuất tệp kết quả dự đoán dạng CSV.
 """
 
@@ -24,13 +24,15 @@ st.set_page_config(
 )
 
 st.title("🎙️ Sàng lọc Đặc trưng Giọng nói Parkinson (Research Prototype)")
-st.warning(f"⚠️ {RESEARCH_WARNING} Mô hình là nguyên mẫu nghiên cứu, không phải thiết bị y tế hay chẩn đoán lâm sàng.")
+st.warning(
+    f"⚠️ {RESEARCH_WARNING} Mô hình là nguyên mẫu nghiên cứu, không phải thiết bị y tế hay chẩn đoán lâm sàng."
+)
 
 st.markdown(
-    "Tải lên tệp CSV chứa cột `name` và 22 đặc trưng tần số/biên độ giọng nói từ bộ dữ liệu UCI. "
+    "Tải lên tệp CSV chứa cột `name` và 20 hoặc 22 đặc trưng tần số/biên độ giọng nói từ UCI. "
     "**Lưu ý:** Hệ thống nhận bảng đặc trưng âm học số, **không nhận audio thô (WAV/MP3)**. "
-    "Mô hình dự đoán từng bản ghi âm, sau đó **gộp xác suất theo cấp độ bệnh nhân** "
-    "kèm kiểm tra Out-of-Distribution (OOD dải P1-P99) và chính sách số lượng bản ghi tối thiểu."
+    "Mô hình chỉ tạo **screening score từng recording**, sau đó **gộp median theo subject** "
+    "và hiển thị cảnh báo training-range cùng độ tin cậy."
 )
 
 
@@ -50,11 +52,11 @@ if uploaded_file is not None:
 
     st.success(
         f"✅ Đã xử lý thành công {len(record_results)} bản ghi âm của "
-        f"{len(subject_results)} bệnh nhân bằng mô hình **{bundle['champion_name']}**."
+        f"{len(subject_results)} subject bằng mô hình **{bundle['champion_name']}**."
     )
     st.caption(
-        " Quy tắc gộp xác suất được khóa từ OOF Train: "
-        f"Phương pháp gộp `{bundle.get('probability_aggregation', 'mean')}`, "
+        " Quy tắc gộp được khóa từ OOF Train: "
+        f"Phương pháp gộp `{bundle['aggregation']}`, "
         f"Ngưỡng sàng lọc `{float(bundle['decision_threshold']):.3f}`."
     )
 
@@ -62,21 +64,17 @@ if uploaded_file is not None:
     st.dataframe(
         subject_results.style.format(
             {
-                "probability_status_1": "{:.1%}",
-                "screening_score": "{:.1%}",
+                "subject_screening_score": "{:.1%}",
             }
         ),
         use_container_width=True,
     )
 
-    chart_frame = subject_results.set_index("subject_id")[["screening_score"]]
-    st.bar_chart(chart_frame, y_label="Điểm sàng lọc nguy cơ (screening_score)", horizontal=False)
+    chart_frame = subject_results.set_index("subject_id")[["subject_screening_score"]]
+    st.bar_chart(chart_frame, y_label="Điểm sàng lọc (screening_score)", horizontal=False)
 
     st.subheader("📝 Kết quả chi tiết từng Bản ghi âm (Record-Level)")
-    st.dataframe(
-        record_results.style.format({"probability_status_1": "{:.1%}"}),
-        use_container_width=True,
-    )
+    st.dataframe(record_results, use_container_width=True)
 
     st.subheader("📈 Trực quan hóa Đặc trưng Giọng nói")
     feature = st.selectbox("Chọn đặc trưng phân tích", bundle["feature_columns"])

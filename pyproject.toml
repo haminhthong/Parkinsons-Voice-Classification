@@ -5,6 +5,24 @@ description = "Leakage-aware Parkinson voice classification at patient level"
 requires-python = ">=3.11"
 readme = "README.md"
 license = { file = "LICENSE" }
+dependencies = [
+  "joblib>=1.4,<2",
+  "numpy>=2.1,<3",
+  "pandas>=2.2,<3",
+  "scikit-learn>=1.5,<2",
+]
+
+[project.scripts]
+parkinson-audit = "src.cli:audit"
+parkinson-evaluate = "src.cli:evaluate"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*", "app*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

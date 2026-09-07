@@ -1,0 +1,24 @@
+{
+  "schema_version": 2,
+  "model_version": "1.0.0",
+  "model_type": "logistic_regression",
+  "feature_count": 20,
+  "aggregation": "median",
+  "decision_threshold": 0.4206085668611331,
+  "dataset_sha256": "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6",
+  "evaluation_protocol": {
+    "outer_folds": 4,
+    "inner_folds": 3,
+    "unit": "subject",
+    "primary_metric": "Balanced Accuracy"
+  },
+  "training_subjects": 32,
+  "training_recordings": 195,
+  "selection": {
+    "C": 0.01,
+    "class_weight": "balanced"
+  },
+  "sklearn_version": "1.9.0",
+  "git_commit": "b866d7ca21beb81ee61e8f623c34990a10f318a4",
+  "scope": "research-only"
+}

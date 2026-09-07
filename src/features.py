@@ -1,22 +1,20 @@
-"""Module quản lý đặc trưng và tạo Pipeline học máy.
+"""Feature contract và pipeline production của dự án.
 
-Khai báo các đặc trưng dư thừa (Redundant Features - có tương quan hoàn hảo với các chỉ số khác),
-lọc danh sách đặc trưng đầu vào cho mô hình (`MODEL_FEATURES`) và đóng gói các bước tiền xử lý
-(`StandardScaler`, `SelectKBest`) cùng mô hình dự đoán vào `sklearn.pipeline.Pipeline`.
+Hai cột dẫn xuất được loại bỏ vì quan hệ đại số tất định. Đây là xử lý dư thừa
+đặc trưng, không phải biện pháp chống leakage. Production v1 chỉ chuẩn hóa 20
+đặc trưng rồi huấn luyện Logistic Regression có regularization L2.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 from sklearn.base import BaseEstimator
-from sklearn.feature_selection import SelectKBest, f_classif
+from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from src.data import ORIGINAL_FEATURES
 
-# Đặc trưng dẫn xuất dư thừa toán học (Jitter:DDP = 3*RAP, Shimmer:DDA = 3*APQ3)
-# Được loại bỏ để tránh thổi phồng trọng số thông tin trùng lặp; đây là quan hệ đại số, không phải data leakage.
 REDUNDANT_FEATURES = ["Jitter:DDP", "Shimmer:DDA"]
 
 
@@ -30,45 +28,48 @@ def compute_feature_percentiles(
     lower: float = 0.01,
     upper: float = 0.99,
 ) -> dict[str, tuple[float, float]]:
-    """Tính toán dải phân vị P1-P99 của các đặc trưng trên tập huấn luyện để kiểm tra OOD.
+    """Tính dải phân vị dùng làm cảnh báo plausibility theo training range."""
+    selected_features = features or MODEL_FEATURES
+    missing = sorted(set(selected_features).difference(frame.columns))
+    if missing:
+        raise ValueError(f"Thiếu đặc trưng khi tính training range: {missing}")
+    if not 0 <= lower < upper <= 1:
+        raise ValueError("lower và upper phải thỏa mãn 0 <= lower < upper <= 1.")
 
-    Args:
-        frame: DataFrame chứa các đặc trưng đầu vào.
-        features: Danh sách tên cột đặc trưng cần tính (mặc định MODEL_FEATURES).
-        lower: Ngưỡng phân vị dưới (mặc định 0.01 cho P1).
-        upper: Ngưỡng phân vị trên (mặc định 0.99 cho P99).
-
-    Returns:
-        dict[str, tuple[float, float]]: Ánh xạ tên đặc trưng sang cặp (giá_trị_P_lower, giá_trị_P_upper).
-    """
-    if features is None:
-        features = MODEL_FEATURES
-
-    ranges: dict[str, tuple[float, float]] = {}
-    for col in features:
-        p_low = float(frame[col].quantile(lower))
-        p_high = float(frame[col].quantile(upper))
-        ranges[col] = (p_low, p_high)
-    return ranges
+    return {
+        column: (
+            float(frame[column].quantile(lower)),
+            float(frame[column].quantile(upper)),
+        )
+        for column in selected_features
+    }
 
 
 def make_pipeline(model: BaseEstimator, *, scale: bool = True) -> Pipeline:
-    """Tạo Pipeline tiền xử lý và mô hình học máy đóng gói hoàn chỉnh.
+    """Tạo pipeline tiền xử lý và estimator mà không có bước chọn feature.
 
-    Đặt `StandardScaler` và `SelectKBest` bên trong Pipeline để đảm bảo việc tính mean/std
-    và chọn đặc trưng chỉ diễn ra trên tập train của từng fold, ngăn ngừa triệt để rò rỉ dữ liệu.
-
-    Args:
-        model: Mô hình phân loại scikit-learn (LogisticRegression, KNN, SVM, RF,...).
-        scale: Nếu True, thực hiện chuẩn hóa Z-score (`StandardScaler`). Đặt False cho mô hình cây.
-
-    Returns:
-        Pipeline: Đối tượng sklearn Pipeline đã sẵn sàng để fit.
+    ``scale`` được giữ để tương thích với experiment cũ. Production luôn dùng
+    ``StandardScaler``; scaler nằm trong pipeline để chỉ fit trên fold train.
     """
-    return Pipeline(
-        [
-            ("scale", StandardScaler() if scale else "passthrough"),
-            ("select", SelectKBest(score_func=f_classif)),
-            ("model", model),
-        ]
+    return Pipeline([("scale", StandardScaler() if scale else "passthrough"), ("model", model)])
+
+
+def make_logistic_pipeline(
+    *,
+    C: float = 1.0,
+    class_weight: str | None = None,
+    random_state: int = 42,
+    max_iter: int = 3000,
+) -> Pipeline:
+    """Tạo pipeline Logistic Regression canonical cho production v1."""
+    if C <= 0:
+        raise ValueError("C phải lớn hơn 0.")
+    return make_pipeline(
+        LogisticRegression(
+            C=C,
+            class_weight=class_weight,
+            max_iter=max_iter,
+            solver="liblinear",
+            random_state=random_state,
+        )
     )

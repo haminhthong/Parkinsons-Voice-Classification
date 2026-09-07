@@ -1,9 +1,9 @@
-# 🎙️ Parkinson’s Voice Feature Screening — Leakage-Aware Patient-Level ML Prototype
+# 🎙️ Patient-Level Parkinson’s Voice Feature Screening
 
-> **Research Prototype:** Hệ thống học máy độc lập cấp bệnh nhân phục vụ nghiên cứu sàng lọc Parkinson từ 22 đặc trưng âm học đã trích xuất sẵn, kết hợp kiểm định lồng (Nested Subject-Level CV), hiệu chỉnh xác suất theo nhóm (Group-Aware Calibration), tối ưu hóa ngưỡng quyết định Out-of-Fold (OOF) và ước lượng độ bất định bằng Patient-Cluster Bootstrap 95% CI.
+> **Research Prototype:** Hệ thống screening theo subject cho dữ liệu acoustic feature đã trích xuất sẵn. Production v1 khóa pipeline `20 features → StandardScaler → L2 Logistic Regression → recording scores → median subject aggregation → subject decision`.
 
 [![CI](https://github.com/haminhthong/parkinsons-voice-classification/actions/workflows/ci.yml/badge.svg)](https://github.com/haminhthong/parkinsons-voice-classification/actions/workflows/ci.yml)
-[![Python](https://img.shields.io/badge/Python-3.10%2B-blue.svg)](https://www.python.org/)
+[![Python](https://img.shields.io/badge/Python-3.11%2B-blue.svg)](https://www.python.org/)
 [![scikit-learn](https://img.shields.io/badge/scikit--learn-1.5%2B-orange.svg)](https://scikit-learn.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-green.svg)](https://fastapi.tiangolo.com/)
 [![Streamlit](https://img.shields.io/badge/Streamlit-1.25%2B-red.svg)](https://streamlit.io/)
@@ -19,12 +19,11 @@
 > - Hệ thống **KHÔNG nhận file âm thanh thô (WAV, MP3)** và không tự động xử lý tín hiệu âm thanh thô. Vì vậy, dự án được định vị chính xác là **Parkinson’s Voice Feature Screening Prototype**, chưa phải hệ thống phân tích giọng nói end-to-end.
 > - Kết quả đầu ra là **cờ sàng lọc nghiên cứu** (`screening_score`, `model-positive`, `model-negative`), **hoàn toàn không phải kết luận chẩn đoán y khoa**.
 
-- **Patient-Level Independent Split (Zero Subject Leakage):** Phân chia holdout, outer CV và inner CV hoàn toàn theo danh tính bệnh nhân (`subject_id`), đảm bảo mọi bản ghi của cùng một người chỉ thuộc về duy nhất một tập phân chia.
-- **Three-Layer Evaluation Strategy:** Tách bạch 3 tầng đánh giá: (1) Inner Model Search, (2) Nested Subject-Level CV để ước lượng độ bất định của toàn bộ quy trình lựa chọn mô hình, và (3) Unseen Patient Holdout.
-- **Honest Generalization Framing:** Không headline bằng con số ngây thơ 92.31% hay điểm số Holdout 8 bệnh nhân ($ROC\text{-}AUC = 1.0$). Nhấn mạnh phân phối **Nested Cross-Validation ($F_1\text{-macro} = 0.519 \pm 0.328$)** và khoảng tin cậy **Patient-Cluster Bootstrap 95% CI** như thước đo bảo thủ và đáng tin cậy nhất.
-- **Group-Aware Sigmoid Calibration:** Hiệu chỉnh xác suất bằng `CalibratedClassifierCV` trên các fold chia theo bệnh nhân, ngăn ngừa bản ghi của cùng một người xuất hiện đồng thời ở bước fit và bước calibration.
-- **Zero-Leakage OOF Rule Optimization:** Khóa toàn bộ quy tắc gộp xác suất (`median`) và ngưỡng quyết định (`decision_threshold`) hoàn toàn từ Out-Of-Fold (OOF) Train với ràng buộc Specificity tối thiểu.
-- **Serving Reliability Guardrails:** Runtime tích hợp kiểm tra Out-of-Distribution (OOD dải P1–P99 của tập huấn luyện), cảnh báo khi đối tượng có ít hơn 3 bản ghi âm (`ONLY_ONE_RECORDING`), hỗ trợ endpoint JSON theo cấp bệnh nhân và chặn nhận nhãn huấn luyện (`status`).
+- **Patient-Level Zero Leakage:** Outer và inner CV đều chia theo `subject_id`; một subject chỉ xuất hiện ở đúng một validation fold.
+- **Canonical Evaluation:** Nested 4 outer × 3 inner subject CV trên đủ 32 subject; threshold chỉ chọn từ OOF của outer-train.
+- **Honest Generalization:** Primary metric là Balanced Accuracy; Macro-F1, sensitivity, specificity, ROC-AUC, Brier, ECE và bootstrap CI là metric phụ.
+- **Fixed Decision Layer:** Aggregation luôn là `median`; recording chỉ có `screening_score`, quyết định chỉ tạo sau khi gộp theo subject.
+- **Serving Guardrails:** Training-range warning, `INSUFFICIENT_RECORDINGS`, fail-fast feature schema và API canonical `/v1/screen/subject`.
 
 ---
 
@@ -32,15 +31,18 @@
 
 - **Mục đích sử dụng (Intended Use):** Phục vụ mục đích học thuật, nghiên cứu phương pháp luận kiểm toán rò rỉ dữ liệu (data leakage audit) trên dữ liệu y sinh dạng bảng có cấu trúc nhóm.
 - **Không phục vụ chẩn đoán (Not for Diagnosis):** Mô hình không phải thiết bị y tế (medical device), không được chứng nhận FDA/CE-MDR và không được sử dụng để đưa ra chỉ định điều trị hoặc thay thế khám chuyên khoa thần kinh.
-- **Chuẩn hóa thuật ngữ:** 
-  - Thay vì "Parkinson's diagnosed", hệ thống xuất: `model-positive` (vượt ngưỡng sàng lọc), `model-negative` (dưới ngưỡng sàng lọc) và điểm nguy cơ sàng lọc `screening_score`.
+- **Chuẩn hóa thuật ngữ:**
+  - Hệ thống xuất `model-positive`/`model-negative` ở cấp subject và `screening_score`; đây không phải disease probability hay chẩn đoán.
 
 ---
 
-## 📖 Câu Chuyện Dự Án: Cạm Bẫy Rò Rỉ Bản Ghi (The 92.31% Leakage Trap)
+## 📖 Câu Chuyện Audit: Cạm Bẫy Rò Rỉ Bản Ghi (The 92.31% Leakage Trap)
 
 ### 🔴 Tại sao đánh giá ngây thơ (Naive Split) đạt 92.31% nhưng gây hiểu nhầm?
-Bộ dữ liệu [UCI Parkinsons](https://archive.ics.uci.edu/dataset/174/parkinsons) gồm 195 bản ghi âm từ **32 bệnh nhân** (mỗi bệnh nhân thực hiện 5–6 lần phát âm nguyên âm `/a/`).
+Bộ dữ liệu [UCI Parkinsons](https://archive.ics.uci.edu/dataset/174/parkinsons) gồm 195 bản ghi âm từ **32 bệnh nhân** (mỗi bệnh nhân có 6–7 lần phát âm nguyên âm `/a/`).
+
+> [!WARNING]
+> Phần này chỉ là thí nghiệm audit minh họa trong `src/audit.py`. Random Forest và record-level split không thuộc production v1, không dùng để chọn model hoặc báo cáo khả năng tổng quát hóa.
 
 Khi sử dụng hàm `train_test_split` ngẫu nhiên thông thường trên từng dòng bản ghi:
 1. Mô hình Random Forest (`test_size=0.2`, `random_state=42`) dễ dàng đạt Accuracy **92.31%**.
@@ -58,15 +60,15 @@ Patient A ──┬── recording 1 ┐
             ├── recording 2 ├──> [TRAIN ONLY] (Toàn bộ bản ghi của A ở Train)
             └── recording 3 ┘
 Patient B ──┬── recording 1 ┐
-            ├── recording 2 ├──> [HOLDOUT ONLY] (Chưa từng xuất hiện ở Train)
+            ├── recording 2 ├──> [OUTER-TEST ONLY] (Chưa từng xuất hiện ở Train)
             └── recording 3 ┘
 ```
 
 ---
 
-## 🏗️ Kiến Trúc Chuẩn 8 Giai Đoạn (Canonical 8-Stage Pipeline)
+## 🏗️ Kiến Trúc Canonical (Patient-Level Pipeline)
 
-Toàn bộ repository tuân thủ chặt chẽ quy trình chuẩn 8 giai đoạn:
+Toàn bộ repository tuân thủ luồng audit → nested evaluation → deployment fit → serving:
 
 ```mermaid
 flowchart TD
@@ -79,43 +81,42 @@ flowchart TD
         A1 --> A2["✂️ Remove Redundant Derived Features<br/>(Jitter:DDP = 3*RAP, Shimmer:DDA = 3*APQ3)"]
     end
 
-    subgraph S3 ["3. PATIENT-LEVEL HOLDOUT"]
+    subgraph S3 ["3. PATIENT-LEVEL NESTED CV"]
         A2 --> H1["👥 32 Unique Patients<br/>(24 PD / 8 Control)"]
-        H1 --> H2["✂️ Stratified Patient Split<br/>(Zero Subject Overlap)"]
-        H2 --> TR["24 Train Subjects<br/>(147 recordings)"]
-        H2 --> HO["8 Unseen Holdout Subjects<br/>(48 recordings)"]
+        H1 --> H2["✂️ 4 Outer Subject Folds<br/>(Zero Subject Overlap)"]
+        H2 --> TR["Outer Train<br/>(inner CV only)"]
+        H2 --> HO["Outer Test<br/>(completely unseen)"]
     end
 
     subgraph S4 ["4. MODEL DEVELOPMENT INSIDE TRAIN"]
-        TR --> M1["📊 Subject-Stratified Folds (5-Fold CV)"]
-        M1 --> M2["⚙️ Fold-Safe Pipeline:<br/>StandardScaler → SelectKBest → Classifier"]
-        M2 --> M3["🤖 KNN / Logistic / RF / HistGB / SVM"]
+        TR --> M1["📊 3 Inner Subject Folds"]
+        M1 --> M2["⚙️ Fold-Safe Pipeline:<br/>StandardScaler → L2 Logistic Regression"]
+        M2 --> M3["🔎 Chỉ tune C và class_weight"]
     end
 
     subgraph S5 ["5. ROBUST MODEL SELECTION"]
-        M3 --> N1["🔄 Nested Subject-Level CV (5 Outer × 3 Inner)"]
-        N1 --> N2["🏆 Champion Selection with Stability Guardrails<br/>(Tie-breaker: Lower Variance → Simpler Model)"]
+        M3 --> N1["🔄 Nested Subject-Level CV (4 Outer × 3 Inner)"]
+        N1 --> N2["🔒 Median aggregation + OOF threshold"]
     end
 
     subgraph S6 ["6. PROBABILITY & DECISION LAYER"]
-        N2 --> C1["🎯 Group-Aware Sigmoid Calibration<br/>(CalibratedClassifierCV on subject folds)"]
-        C1 --> C2["📈 OOF Probabilities per Record"]
-        C2 --> C3["👥 Subject Aggregation (median vs mean vs max)"]
-        C3 --> C4["🎯 OOF Threshold Optimization (Balanced Acc & Spec >= 0.5)"]
+        N2 --> C1["📈 Recording screening scores"]
+        C1 --> C2["👥 Median score per subject"]
+        C2 --> C3["🎯 OOF threshold: maximize Balanced Accuracy"]
     end
 
-    subgraph S7 ["7. FINAL HOLDOUT EVALUATION"]
-        HO --> E1["🧪 Single Sanity Check on 8 Unseen Subjects"]
-        C4 --> E1
-        E1 --> E2["📊 Metrics: F1, Balanced Acc, Sensitivity, Specificity, ROC-AUC"]
-        E2 --> E3["🎲 Patient-Cluster Bootstrap 95% CI (2,000x)"]
+    subgraph S7 ["7. CROSSFITTED EVALUATION"]
+        HO --> E1["🧪 32 subjects each unseen once"]
+        C3 --> E1
+        E1 --> E2["📊 Primary: Balanced Accuracy"]
+        E2 --> E3["🎲 Subject Bootstrap 95% CI (5,000x)"]
     end
 
     subgraph S8 ["8. SERVING & RELIABILITY"]
-        C4 --> S8_1["📦 Export Bundle (calibrated model, threshold, P1-P99 ranges)"]
-        S8_1 --> S8_2["⚡ FastAPI (CSV & JSON /predict/subject)"]
+        C3 --> S8_1["📦 Versioned Bundle (model + explicit contract)"]
+        S8_1 --> S8_2["⚡ FastAPI /v1/screen/subject"]
         S8_1 --> S8_3["🌐 Streamlit Dashboard"]
-        S8_2 --> S8_4["🛡️ OOD Checks (P1-P99) & Minimum Recordings (<3) Warnings"]
+        S8_2 --> S8_4["🛡️ Training-range & INSUFFICIENT_RECORDINGS warnings"]
     end
 ```
 
@@ -131,70 +132,35 @@ flowchart TD
 
 ---
 
-## ⚖️ Chiến Lược Đánh Giá 3 Tầng (Three Evaluation Layers)
+## ⚖️ Giao Thức Đánh Giá Canonical
 
 Để tránh nhầm lẫn giữa các bảng metric, quy trình đánh giá được phân định thành 3 tầng độc lập:
 
-1. **Layer 1: Inner Model Search:** Quét lưới siêu tham số và so sánh sơ bộ các thuật toán trên các fold CV của tập Train.
-2. **Layer 2: Nested Cross-Validation (Đánh giá quy trình):** Đánh giá toàn bộ pipeline lựa chọn mô hình qua 5 outer folds $\times$ 3 inner folds. Đây là thước đo trung thực nhất về độ bất định khi tổng quát hóa sang tập bệnh nhân mới.
-3. **Layer 3: Independent Patient Holdout (Kiểm tra độc lập cuối cùng):** Kiểm thử mô hình đã đóng băng duy nhất 1 lần trên 8 bệnh nhân chưa từng xuất hiện.
+1. **Inner model search:** Chỉ thử `C` và `class_weight` của Logistic Regression trên 3 inner subject folds.
+2. **Nested subject CV:** 4 outer folds trên toàn bộ 32 subject. Mỗi subject là outer-test đúng một lần; threshold được chọn trong outer-train OOF.
+3. **Deployment fit:** Sau đánh giá, chọn cấu hình frozen và fit trên đủ 32 subject để tạo artifact. Bước này không tạo thêm independent test.
+
+Không gọi 8 subject holdout cũ là clinical validation. Nếu có external cohort, cohort đó mới là final test độc lập.
 
 ---
 
 <!-- GENERATED_RESULTS_START -->
 
-## 📊 Kết Quả Thực Nghiệm & Đánh Giá Chi Tiết
+### Kết quả nested subject-level evaluation
 
-### 1. Bảng So Sánh Benchmark Mô Hình (Subject-Level Cross-Validation)
+- **Protocol:** `4 outer × 3 inner`, unit=`subject`
+- **Primary metric:** `Balanced Accuracy`
+- **Cross-fitted subjects:** `32`; mỗi subject xuất hiện đúng một lần.
+- **Pooled Balanced Accuracy:** `0.6250`
+- **Pooled Macro-F1:** `0.6135`
+- **Pooled ROC-AUC:** `0.7396`
 
-| Model | Subject F1-macro mean | Subject F1-macro std | Subject Balanced Accuracy mean | Subject ROC-AUC mean |
-| :--- | :---: | :---: | :---: | :---: |
-| **KNN** | **0.7270** | **0.2527** | **0.7500** | **0.9000** |
-| SVM (RBF, decision score) | 0.7270 | 0.2527 | 0.7500 | 0.6833 |
-| Random Forest | 0.7270 | 0.2527 | 0.7500 | 0.6000 |
-| HistGradientBoosting | 0.7270 | 0.2527 | 0.7500 | 0.5000 |
-| Logistic Regression | 0.6794 | 0.2166 | 0.7250 | 0.7000 |
-| Dummy Classifier | 0.4274 | 0.0269 | 0.5000 | 0.4750 |
+### Deployment contract
 
-> [!NOTE]
-> **Giải thích hiện tượng hòa điểm ($F_1 \approx 0.7270$):**
-> Do tập train chỉ có 24 bệnh nhân (với 6 bệnh nhân đối chứng), các metric ở cấp bệnh nhân có độ phân giải thô. KNN, SVM, RF và HistGB đều cho cùng $F_1$ trung bình trên các fold. 
-> KNN được chọn làm Champion thông qua **Stability & Simplicity Guardrail**: khi điểm $F_1$ hòa nhau, hệ thống ưu tiên phương sai thấp hơn, điểm phân tách ROC-AUC cao hơn (0.9000) và cấu trúc thuật toán đơn giản hơn để tránh overfit.
-
----
-
-### 2. So Sánh Quy Tắc Gộp Xác Suất Trên OOF Train
-
-| Phương Pháp Gộp | Ngưỡng Tối Ưu | Balanced Accuracy | F1-macro | Specificity | Brier Score |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **median** (Champion) | **0.7500** | **0.6944** | **0.6794** | **0.5000** | **0.2185** |
-| mean | 0.7600 | 0.6667 | 0.6489 | 0.5000 | 0.2214 |
-| max | 0.8800 | 0.6389 | 0.6286 | 0.5000 | 0.2301 |
-
-- `mean`: Đo lường mức rủi ro trung bình qua các lần phát âm.
-- `median`: **Chiến thắng** nhờ tính bền vững (robustness), loại bỏ ảnh hưởng của các bản ghi phát âm dị biệt (outlier recordings).
-- `max`: Chiến lược quá bảo thủ, dễ bị kích hoạt báo động giả chỉ bởi 1 lần phát âm lỗi.
-
----
-
-### 3. Đánh Giá Lồng Nested CV vs Kiểm Thử Holdout 8 Bệnh Nhân
-
-| Chỉ Số Đánh Giá | Nested Subject CV (24 Bệnh Nhân Train) | Holdout Point Estimate (8 Bệnh Nhân Unseen) | Patient-Cluster Bootstrap 95% CI (Holdout) |
-| :--- | :---: | :---: | :---: |
-| **F1-macro** | `0.5190 ± 0.3283` | `0.7949` | **[0.3846, 1.0000]** |
-| **Balanced Accuracy** | `0.6083` | `0.7500` | **[0.5000, 1.0000]** |
-| **Sensitivity (Recall)** | `0.6444` | `1.0000` | **[1.0000, 1.0000]** |
-| **Specificity** | `0.5722` | `0.5000` | **[0.0000, 1.0000]** |
-| **ROC-AUC** | `0.6333` | `1.0000` | **[1.0000, 1.0000]** |
-| **Brier Score** | `0.1893` | `0.1124` | **[0.0338, 0.2686]** |
-| **ECE (5 bins)** | — | `0.0513` *(chỉ mang tính mô tả)* | — |
-
-> [!WARNING]
-> **Nhận định quan trọng về sự chênh lệch giữa Nested CV và Holdout:**
-> 1. **Holdout 8 bệnh nhân là cực kỳ nhỏ:** Tập test chỉ có 6 bệnh nhân Parkinson và **2 người khỏe mạnh**. Điểm số Specificity = 0.50 thực chất tương ứng với việc đoán đúng **1 trong số 2 người**.
-> 2. **ROC-AUC = 1.00 không phải bằng chứng tuyệt đối:** Con số này chỉ phản ánh sự phân tách trên đúng 8 đối tượng này.
-> 3. **Nested CV phản ánh thực tế hơn:** Nested CV đạt $F_1 = 0.519 \pm 0.328$ với độ lệch chuẩn lớn, chứng minh hiệu năng rất nhạy cảm với cách phân nhóm bệnh nhân nhỏ. Đây là đặc tính thống kê tự nhiên của bài toán, không phải lỗi code.
-> 4. **Bootstrap CI rộng:** Khoảng tin cậy $F_1$ từ `[0.385, 1.000]` và Specificity từ `[0.000, 1.000]` phơi bày toàn bộ độ bất định thống kê mà điểm số đơn lẻ (point estimate) che giấu.
+- `StandardScaler → L2 Logistic Regression` với `aggregation=median`.
+- `C=0.01`, `class_weight=balanced`.
+- Full-data group-OOF threshold: `0.4206085668611331`.
+- Artifact được fit trên toàn bộ 32 subject sau khi protocol khóa; chưa có external cohort.
 
 <!-- GENERATED_RESULTS_END -->
 
@@ -205,34 +171,28 @@ flowchart TD
 Các biểu đồ bên dưới được sinh tự động bởi module `src/report.py` và lưu trữ trong `reports/figures/`:
 
 <p align="center">
-  <img src="reports/figures/model_benchmark.png" width="48%" title="Model Benchmark F1-Macro CV" />
-  <img src="reports/figures/holdout_probabilities.png" width="48%" title="Phân bố điểm sàng lọc Holdout theo bệnh nhân" />
+  <img src="reports/figures/model_benchmark.png" width="48%" title="Inner selection của Logistic Regression" />
+  <img src="reports/figures/holdout_probabilities.png" width="48%" title="Phân bố cross-fitted screening score theo subject" />
 </p>
 
 <p align="center">
   <img src="reports/figures/threshold_aggregation.png" width="48%" title="So sánh threshold và cách gộp xác suất trên OOF Train" />
-  <img src="reports/figures/feature_selection_stability.png" width="48%" title="Độ ổn định khi chọn đặc trưng" />
+  <img src="reports/figures/feature_selection_stability.png" width="48%" title="Feature contract cố định gồm 20 đặc trưng" />
 </p>
 
 ---
 
-## 🔍 Độ Ổn Định Lựa Chọn Đặc Trưng (Feature Stability)
+## 🔍 Feature Contract Cố Định
 
-| Đặc trưng âm học | Số fold CV lựa chọn (trên 5 fold) | Tần suất xuất hiện |
-| :--- | :---: | :---: |
-| `PPE` | 5 / 5 | 100% |
-| `spread1` | 5 / 5 | 100% |
-| `MDVP:Fo(Hz)` | 5 / 5 | 100% |
-| `MDVP:Flo(Hz)` | 5 / 5 | 100% |
-| `MDVP:Shimmer` | 5 / 5 | 100% |
-| `Shimmer:APQ5` | 5 / 5 | 100% |
-| `MDVP:APQ` | 5 / 5 | 100% |
-| `HNR` | 5 / 5 | 100% |
-| `MDVP:Fhi(Hz)` | 4 / 5 | 80% |
-| `spread2` | 4 / 5 | 80% |
+Production không chạy `SelectKBest` hay feature selection theo fold. Contract được khóa minh bạch:
+
+- 22 cột acoustic gốc được kiểm tra schema ở đầu vào.
+- Loại đúng 2 cột dư thừa đại số: `Jitter:DDP` và `Shimmer:DDA`.
+- 20 cột còn lại đi qua `StandardScaler` rồi vào L2 Logistic Regression.
+- Danh sách feature, quy tắc tạo `subject_id` và checksum dataset được lưu trong `feature_schema.json` và `data_manifest.json`.
 
 > [!NOTE]
-> **Lưu ý giải thích:** Việc một số đặc trưng không được chọn 100% qua các fold thể hiện sự bất định do kích thước mẫu nhỏ, **không mang ý nghĩa kết luận cơ chế nhân quả sinh học**.
+> **Lưu ý:** Hai cột bị loại là dư thừa toán học, không phải bằng chứng data leakage hay kết luận nhân quả sinh học.
 
 ---
 
@@ -250,30 +210,30 @@ Hệ thống serving cung cấp 2 phương thức giao tiếp REST API qua FastA
                                          │
                                          ▼
                   ┌──────────────────────────────────────────────┐
-                  │ Runtime Reliability & OOD Checks             │
+                  │ Runtime Reliability & Training-Range Checks   │
                   │ 1. Giá trị ngoài dải P1-P99 tập train?       │
-                  │ 2. Số lượng bản ghi < 3 recordings?          │
+                  │ 2. Ít recording hơn training minimum?        │
                   └──────────────────────┬───────────────────────┘
                                          │
                                          ▼
                   ┌──────────────────────────────────────────────┐
                   │ Recording Inference & Median Aggregation     │
-                  │ Calibrated KNN + OOF Decision Threshold      │
+                  │ Logistic Regression + Median + OOF Threshold │
                   └──────────────────────┬───────────────────────┘
                                          │
                                          ▼
                   ┌──────────────────────────────────────────────┐
                   │ Response JSON                                │
-                  │ screening_score, screening_flag,             │
+                  │ subject_screening_score, screening_result,   │
                   │ reliability ("standard" | "limited"),        │
-                  │ warnings: ["ONLY_ONE_RECORDING", ...]        │
+                  │ warnings: ["INSUFFICIENT_RECORDINGS", ...]    │
                   └──────────────────────────────────────────────┘
 ```
 
-### 1. Endpoint JSON theo cấp bệnh nhân: `POST /predict/subject`
+### 1. Endpoint JSON canonical: `POST /v1/screen/subject`
 Yêu cầu mẫu:
 ```bash
-curl -X POST "http://localhost:8000/predict/subject" \
+curl -X POST "http://localhost:8000/v1/screen/subject" \
      -H "Content-Type: application/json" \
      -d '{
        "subject_id": "patient_101",
@@ -308,25 +268,32 @@ Phản hồi mẫu:
 ```json
 {
   "warning": "KẾT QUẢ NGHIÊN CỨU: Mô hình phân loại giọng nói Parkinson là bản thử nghiệm học thuật, không dùng để chẩn đoán, điều trị hay thay thế bác sĩ.",
-  "model": "KNN + sigmoid calibration",
+  "model": "Logistic Regression",
+  "model_version": "1.0.0",
   "subject_id": "patient_101",
   "screening_score": 0.814,
-  "screening_flag": true,
+  "screening_result": "model-positive",
   "reliability": "limited",
   "warnings": [
-    "ONLY_ONE_RECORDING: Đối tượng chỉ có 1 bản ghi âm; độ tin cậy gộp xác suất bị hạn chế (khuyến nghị >= 3 bản ghi)"
+    "INSUFFICIENT_RECORDINGS: subject có 1 recording; training minimum là 6"
   ],
   "aggregation": "median",
   "decision_threshold": 0.75,
   "n_recordings": 1,
-  "record_probabilities": [0.814]
+  "recording_scores": [0.814]
 }
 ```
 
 ### 2. Endpoint tải lên file CSV: `POST /predict`
 ```bash
-curl -X POST "http://localhost:8000/predict" -F "file=@data/parkinsons.csv"
+curl -X POST "http://localhost:8000/predict" -F "file=@path/to/unlabeled_features.csv"
 ```
+
+CSV gửi vào API không được chứa cột `status`; endpoint này chỉ là tiện ích batch,
+còn luồng canonical dùng `POST /v1/screen/subject` để trả kết quả ở cấp subject.
+
+Các endpoint metadata: `GET /health`, `GET /ready`, `GET /model-info`. CSV serving
+là batch/research utility; endpoint subject canonical là `/v1/screen/subject`.
 
 ---
 
@@ -374,7 +341,7 @@ python -m pytest
 ## ⚠️ Giới Hạn Nghiên Cứu & Nợ Kỹ Thuật (Limitations)
 
 1. **Cỡ mẫu nhỏ (32 bệnh nhân):** Chỉ có 8 đối chứng khỏe mạnh trong toàn bộ tập dữ liệu, dẫn đến phương sai ước lượng lớn.
-2. **Holdout chỉ có 8 người:** Specificity và ROC-AUC phụ thuộc vào số lượng cá nhân quá ít; bắt buộc phải đọc kèm Nested CV và Bootstrap CI.
+2. **Chưa có external cohort:** Nested 4×3 CV và bootstrap trên 32 cross-fitted subject là bằng chứng internal; không được gọi là clinical validation.
 3. **Thiếu biến số nhân khẩu học:** Dữ liệu UCI không chứa tuổi (age), giới tính sinh học (sex), thiết bị thu âm và bệnh viện thu thập, do đó không thể phân tích độ ổn định theo nhóm nhân khẩu học.
 4. **Định dạng lưu trữ Joblib:** Joblib phù hợp với môi trường portfolio cá nhân; trong môi trường production bảo mật cao, cần chuyển sang format an toàn như `skops` hoặc `ONNX` để ngăn rủi ro thực thi mã tùy ý.
 

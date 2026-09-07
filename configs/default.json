@@ -1,9 +1,19 @@
 {
   "random_state": 42,
-  "test_size": 0.25,
-  "benchmark_splits": 5,
-  "calibration_splits": 3,
-  "minimum_specificity": 0.5,
-  "aggregation_candidates": ["mean", "median", "max"],
-  "selection_metric": "CV F1-macro"
+  "outer_folds": 4,
+  "inner_folds": 3,
+  "aggregation": "median",
+  "bootstrap_replicates": 5000,
+  "model": {
+    "type": "logistic_regression",
+    "penalty": "l2",
+    "solver": "liblinear",
+    "max_iter": 3000
+  },
+  "search": {
+    "C": [0.01, 0.1, 1.0, 10.0, 100.0],
+    "class_weight": [null, "balanced"]
+  },
+  "selection_metric": "Balanced Accuracy",
+  "threshold_objective": "subject-level Balanced Accuracy"
 }

@@ -1,0 +1,25 @@
+{
+  "dataset": "UCI Parkinsons",
+  "dataset_sha256": "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6",
+  "n_recordings": 195,
+  "n_subjects": 32,
+  "subject_distribution": {
+    "0": 8,
+    "1": 24
+  },
+  "source_features": 22,
+  "model_features": 20,
+  "subject_id_rule": "drop_final_recording_suffix",
+  "dropped_features": [
+    "Jitter:DDP",
+    "Shimmer:DDA"
+  ],
+  "duplicate_recording_names": 0,
+  "duplicate_full_feature_vectors": 0,
+  "recordings_per_subject": {
+    "min": 6,
+    "median": 6.0,
+    "max": 7
+  },
+  "evaluation_protocol": "nested-stratified-subject-cv-4x3"
+}

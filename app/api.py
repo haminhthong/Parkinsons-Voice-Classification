@@ -2,10 +2,8 @@
 
 Cung cấp các endpoint:
 - GET `/health`: Kiểm tra trạng thái hoạt động của dịch vụ API.
-- POST `/predict`: Tiếp nhận tệp dữ liệu CSV chứa 22 đặc trưng âm học, thực hiện suy luận
-  qua mô hình Calibrated Pipeline và trả về kết quả sàng lọc chi tiết kèm kiểm tra độ tin cậy.
-- POST `/predict/subject`: Tiếp nhận cấu trúc JSON cho một bệnh nhân gồm nhiều bản ghi âm,
-  trả về điểm số sàng lọc, cờ cảnh báo OOD và độ tin cậy (cấm truyền nhãn status).
+- POST `/predict`: Tiện ích batch/research cho CSV chứa 20 hoặc 22 đặc trưng âm học.
+- POST `/v1/screen/subject`: Endpoint canonical nhận nhiều recording của một subject.
 """
 
 from __future__ import annotations
@@ -64,7 +62,7 @@ app = FastAPI(
     description=(
         "API sàng lọc đặc trưng âm học giọng nói Parkinson chống rò rỉ dữ liệu "
         "(Research Screening Prototype). "
-        "Lưu ý: Chỉ nhận bảng 22 đặc trưng âm học đã trích xuất sẵn (CSV/JSON), "
+        "Lưu ý: Chỉ nhận bảng 20 hoặc 22 đặc trưng âm học đã trích xuất sẵn (CSV/JSON), "
         "KHÔNG nhận file âm thanh thô WAV/MP3. Không dùng cho mục đích chẩn đoán y tế."
     ),
     version="1.2.0",
@@ -76,6 +74,36 @@ app = FastAPI(
 def health() -> dict[str, str]:
     """Endpoint kiểm tra sức khỏe hệ thống API (Health Check)."""
     return {"status": "ok", "scope": "research-only"}
+
+
+@app.get("/ready")
+def ready(request: Request) -> dict[str, str]:
+    """Cho biết model bundle đã sẵn sàng nhận inference hay chưa."""
+    bundle = getattr(request.app.state, "model_bundle", None)
+    if bundle is None and ARTIFACT_PATH.is_file():
+        bundle = load_bundle(ARTIFACT_PATH)
+    if bundle is None:
+        raise HTTPException(status_code=503, detail="Model chưa sẵn sàng.")
+    return {"status": "ready", "model_version": str(bundle["model_version"])}
+
+
+@app.get("/model-info")
+def model_info(request: Request) -> dict:
+    """Trả về contract triển khai, không trả thông tin nhãn của input."""
+    bundle = getattr(request.app.state, "model_bundle", None)
+    if bundle is None and ARTIFACT_PATH.is_file():
+        bundle = load_bundle(ARTIFACT_PATH)
+    if bundle is None:
+        raise HTTPException(status_code=503, detail="Model chưa sẵn sàng.")
+    return {
+        "model_version": str(bundle["model_version"]),
+        "model_type": bundle["model_type"],
+        "feature_count": len(bundle["feature_columns"]),
+        "aggregation": bundle["aggregation"],
+        "decision_threshold": float(bundle["decision_threshold"]),
+        "training_dataset": "UCI Parkinsons",
+        "scope": "research-only",
+    }
 
 
 @app.post("/predict")
@@ -151,14 +179,16 @@ async def predict(
     return {
         "warning": RESEARCH_WARNING,
         "model": bundle["champion_name"],
-        "probability_aggregation": bundle.get("probability_aggregation", "mean"),
+        "model_version": str(bundle["model_version"]),
+        "aggregation": bundle["aggregation"],
         "decision_threshold": float(bundle["decision_threshold"]),
         "records": records.to_dict(orient="records"),
         "subjects": subjects.to_dict(orient="records"),
     }
 
 
-@app.post("/predict/subject")
+@app.post("/v1/screen/subject")
+@app.post("/predict/subject", include_in_schema=False)
 async def predict_subject(
     request: Request,
     payload: SubjectInferenceRequest,

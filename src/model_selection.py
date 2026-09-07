@@ -1,11 +1,8 @@
-"""Module benchmark và lựa chọn mô hình ở cấp độ bệnh nhân (Subject-Level Model Selection & Nested CV).
+"""Chọn cấu hình và đánh giá nested CV ở cấp độ subject.
 
-Bao gồm các hàm:
-- `evaluate_parameter_set`: Đánh giá 1 tập tham số qua các fold CV cấp bệnh nhân.
-- `search_subject_level`: Quét lưới tham số và xếp hạng theo Subject F1-macro mean/std, Subject Balanced Accuracy mean, Subject ROC-AUC mean.
-- `select_champion`: Tự động tìm mô hình Champion tốt nhất trong số danh sách ứng viên.
-- `fit_complete_pipeline`: Huấn luyện mô hình Calibrated hoàn chỉnh kèm quy tắc gộp và ngưỡng quyết định OOF.
-- `nested_subject_evaluation`: Đánh giá lồng (Nested Cross-Validation) toàn bộ pipeline lựa chọn mô hình.
+Production v1 chỉ dùng StandardScaler → L2 Logistic Regression. Các quyết định
+C, class_weight và threshold đều được chọn từ dữ liệu OOF của phần train tương
+ứng; outer-test chỉ được dùng để đo tổng quát hóa.
 """
 
 from __future__ import annotations
@@ -16,10 +13,9 @@ from typing import Any
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.calibration import CalibratedClassifierCV
 from sklearn.model_selection import ParameterGrid
 
-from src.data import TARGET_COLUMN, build_subject_table
+from src.data import SUBJECT_COLUMN, TARGET_COLUMN
 from src.evaluate import (
     aggregate_subject_predictions,
     calculate_metrics,
@@ -27,17 +23,35 @@ from src.evaluate import (
     positive_score,
     select_decision_threshold,
 )
-from src.features import MODEL_FEATURES
+from src.features import MODEL_FEATURES, make_logistic_pipeline
 
 
 @dataclass
 class ChampionResult:
-    """Kết quả lựa chọn mô hình Champion."""
+    """Kết quả lựa chọn model của API tương thích; production luôn là Logistic Regression."""
 
     name: str
     estimator: Any
     parameters: dict[str, Any]
     metrics: dict[str, float]
+
+
+def _oof_recording_scores(
+    frame: pd.DataFrame,
+    estimator,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    feature_columns: list[str],
+) -> np.ndarray:
+    """Sinh score OOF; mỗi recording chỉ được dự đoán ở fold validation của nó."""
+    scores = np.full(len(frame), np.nan, dtype=float)
+    for fit_index, valid_index in folds:
+        model = clone(estimator)
+        fit_frame = frame.iloc[fit_index]
+        model.fit(fit_frame[feature_columns], fit_frame[TARGET_COLUMN])
+        scores[valid_index] = positive_score(model, frame.iloc[valid_index][feature_columns])
+    if np.isnan(scores).any():
+        raise AssertionError("OOF chưa tạo score cho toàn bộ recording.")
+    return scores
 
 
 def evaluate_parameter_set(
@@ -47,48 +61,34 @@ def evaluate_parameter_set(
     folds: list[tuple[np.ndarray, np.ndarray]],
     feature_columns: list[str],
     *,
-    aggregation: str = "mean",
+    aggregation: str = "median",
     threshold: float = 0.5,
 ) -> pd.DataFrame:
-    """Đánh giá một cấu hình tham số qua các fold CV ở cấp độ bệnh nhân."""
-    fold_rows = []
-
+    """Đánh giá một estimator generic; dùng chủ yếu cho experiment tương thích."""
+    rows = []
     for fold_number, (fit_index, valid_index) in enumerate(folds, start=1):
         fit_frame = frame.iloc[fit_index]
         valid_frame = frame.iloc[valid_index]
-
         model = clone(estimator).set_params(**parameters)
-        model.fit(
-            fit_frame[feature_columns],
-            fit_frame[TARGET_COLUMN],
-        )
-
-        probabilities = positive_score(
-            model,
-            valid_frame[feature_columns],
-        )
-
+        model.fit(fit_frame[feature_columns], fit_frame[TARGET_COLUMN])
+        scores = positive_score(model, valid_frame[feature_columns])
         subjects = aggregate_subject_predictions(
             valid_frame,
-            probabilities,
+            scores,
             aggregation=aggregation,
             threshold=threshold,
         )
-
-        metrics = calculate_metrics(
-            subjects["status"],
-            subjects["prediction"],
-            subjects["probability"],
-        )
-
-        fold_rows.append(
+        rows.append(
             {
                 "Fold": fold_number,
-                **metrics,
+                **calculate_metrics(
+                    subjects["status"],
+                    subjects["prediction"],
+                    subjects["probability"],
+                ),
             }
         )
-
-    return pd.DataFrame(fold_rows)
+    return pd.DataFrame(rows)
 
 
 def search_subject_level(
@@ -98,12 +98,9 @@ def search_subject_level(
     folds: list[tuple[np.ndarray, np.ndarray]],
     feature_columns: list[str],
 ) -> tuple[pd.Series, pd.DataFrame]:
-    """Tìm kiếm siêu tham số tối ưu dựa trên metric gộp ở cấp bệnh nhân."""
+    """Tìm tham số generic theo subject; benchmark ngoài production."""
     candidates = []
-
-    grid = list(ParameterGrid(parameter_grid)) if parameter_grid else [{}]
-
-    for parameters in grid:
+    for parameters in list(ParameterGrid(parameter_grid)) if parameter_grid else [{}]:
         fold_table = evaluate_parameter_set(
             estimator,
             parameters,
@@ -111,39 +108,35 @@ def search_subject_level(
             folds,
             feature_columns,
         )
-
         candidates.append(
             {
                 "Parameters": parameters,
-                "Subject F1-macro mean": fold_table["F1-macro"].mean(),
-                "Subject F1-macro std": fold_table["F1-macro"].std(ddof=0),
-                "Subject Balanced Accuracy mean": (fold_table["Balanced Accuracy"].mean()),
-                "Subject ROC-AUC mean": fold_table["ROC-AUC"].mean(),
+                "Subject F1-macro mean": float(fold_table["F1-macro"].mean()),
+                "Subject F1-macro std": float(fold_table["F1-macro"].std(ddof=0)),
+                "Subject Balanced Accuracy mean": float(fold_table["Balanced Accuracy"].mean()),
+                "Subject ROC-AUC mean": float(fold_table["ROC-AUC"].mean()),
             }
         )
-
     result = pd.DataFrame(candidates).sort_values(
         [
-            "Subject F1-macro mean",
             "Subject Balanced Accuracy mean",
+            "Subject F1-macro mean",
             "Subject ROC-AUC mean",
         ],
         ascending=False,
     )
-
     return result.iloc[0], result
 
 
 def _model_complexity_rank(name: str) -> int:
-    """Xếp hạng độ phức tạp tương đối của kiến trúc mô hình (giá trị nhỏ hơn là đơn giản hơn)."""
-    complexity = {
+    """Xếp hạng legacy để experiment cũ không bị lỗi import."""
+    return {
         "Dummy": 0,
         "Logistic Regression": 1,
         "KNN": 2,
         "Random Forest": 3,
         "HistGradientBoosting": 4,
-    }
-    return complexity.get(name, 10)
+    }.get(name, 10)
 
 
 def select_champion(
@@ -154,106 +147,229 @@ def select_champion(
     feature_columns: list[str] | None = None,
     f1_tolerance: float = 0.005,
 ) -> ChampionResult:
-    """Lựa chọn mô hình Champion với cơ chế bảo vệ độ ổn định (Stability Guardrail).
-
-    Quy tắc xếp hạng:
-    1. Làm tròn Subject F1-macro mean theo ngưỡng sai khác nhỏ (tolerance) để nhận diện các mô hình hòa điểm.
-    2. Khi các mô hình có F1-macro xấp xỉ nhau, ưu tiên phương sai thấp nhất (-F1 std) nhằm đảm bảo tính ổn định.
-    3. Ưu tiên Balanced Accuracy mean.
-    4. Ưu tiên ROC-AUC mean.
-    5. Ưu tiên kiến trúc đơn giản hơn (simpler model) để tránh overfitting trên tập dữ liệu nhỏ (32 bệnh nhân).
-    """
-    if feature_columns is None:
-        feature_columns = MODEL_FEATURES
-
-    champion_candidates = []
-
+    """API tương thích cho experiment; không được production dùng để chọn model."""
+    del f1_tolerance
+    feature_columns = feature_columns or MODEL_FEATURES
+    candidates = []
     for name, (estimator, grid) in model_specs.items():
-        # Bỏ qua các mô hình không hỗ trợ xác suất dự đoán hoặc ghi rõ không triển khai
-        if name == "SVM (RBF, decision score)":
-            continue
-
-        best_candidate, _ = search_subject_level(
+        best, _ = search_subject_level(
             estimator,
             grid,
             frame,
             folds,
             feature_columns,
         )
-
-        best_params = best_candidate["Parameters"]
-        best_model = clone(estimator).set_params(**best_params)
-
-        champion_candidates.append(
+        candidates.append(
             ChampionResult(
                 name=name,
-                estimator=best_model,
-                parameters=best_params,
+                estimator=clone(estimator).set_params(**best["Parameters"]),
+                parameters=best["Parameters"],
                 metrics={
-                    "Subject F1-macro mean": float(best_candidate["Subject F1-macro mean"]),
-                    "Subject F1-macro std": float(best_candidate["Subject F1-macro std"]),
-                    "Subject Balanced Accuracy mean": float(
-                        best_candidate["Subject Balanced Accuracy mean"]
-                    ),
-                    "Subject ROC-AUC mean": float(best_candidate["Subject ROC-AUC mean"]),
+                    "Subject F1-macro mean": float(best["Subject F1-macro mean"]),
+                    "Subject F1-macro std": float(best["Subject F1-macro std"]),
+                    "Subject Balanced Accuracy mean": float(best["Subject Balanced Accuracy mean"]),
+                    "Subject ROC-AUC mean": float(best["Subject ROC-AUC mean"]),
                 },
             )
         )
+    if not candidates:
+        raise ValueError("model_specs không được rỗng.")
+    return max(
+        candidates,
+        key=lambda candidate: (
+            candidate.metrics["Subject Balanced Accuracy mean"],
+            candidate.metrics["Subject F1-macro mean"],
+            -candidate.metrics["Subject F1-macro std"],
+            -_model_complexity_rank(candidate.name),
+        ),
+    )
 
-    def _sort_key(c: ChampionResult) -> tuple:
-        # Nhóm F1 theo bước tolerance để phát hiện tie
-        f1_bucket = round(c.metrics["Subject F1-macro mean"] / f1_tolerance) * f1_tolerance
-        stability = -round(c.metrics["Subject F1-macro std"], 4)
-        bal_acc = round(c.metrics["Subject Balanced Accuracy mean"], 4)
-        roc_auc = round(c.metrics["Subject ROC-AUC mean"], 4)
-        simplicity = -_model_complexity_rank(c.name)
-        return (f1_bucket, stability, bal_acc, roc_auc, simplicity)
 
-    champion_candidates.sort(key=_sort_key, reverse=True)
+def search_logistic_configuration(
+    frame: pd.DataFrame,
+    folds: list[tuple[np.ndarray, np.ndarray]],
+    *,
+    feature_columns: list[str] | None = None,
+    C_values: list[float] | None = None,
+    class_weights: list[str | None] | None = None,
+    random_state: int = 42,
+) -> dict[str, Any]:
+    """Chọn C và class_weight chỉ bằng OOF subject-level của inner CV."""
+    feature_columns = feature_columns or MODEL_FEATURES
+    C_values = C_values or [0.01, 0.1, 1.0, 10.0, 100.0]
+    class_weights = class_weights or [None, "balanced"]
+    candidates: list[dict[str, Any]] = []
 
-    return champion_candidates[0]
+    for C in C_values:
+        for class_weight in class_weights:
+            estimator = make_logistic_pipeline(
+                C=float(C),
+                class_weight=class_weight,
+                random_state=random_state,
+            )
+            scores = _oof_recording_scores(frame, estimator, folds, feature_columns)
+            subjects = aggregate_subject_predictions(frame, scores, aggregation="median")
+            threshold, threshold_table = select_decision_threshold(subjects)
+            subjects["prediction"] = (subjects["probability"] >= threshold).astype(int)
+            metrics = calculate_metrics(
+                subjects["status"],
+                subjects["prediction"],
+                subjects["probability"],
+            )
+            candidates.append(
+                {
+                    "C": float(C),
+                    "class_weight": class_weight,
+                    "threshold": float(threshold),
+                    "oof_probabilities": scores,
+                    "subjects": subjects,
+                    "threshold_table": threshold_table,
+                    **metrics,
+                }
+            )
+
+    comparison = pd.DataFrame(
+        [
+            {
+                "_candidate_index": index,
+                **{
+                    key: value
+                    for key, value in candidate.items()
+                    if key not in {"oof_probabilities", "subjects", "threshold_table"}
+                },
+            }
+            for index, candidate in enumerate(candidates)
+        ]
+    ).sort_values(
+        ["Balanced Accuracy", "F1-macro", "ROC-AUC", "Brier score", "C"],
+        ascending=[False, False, False, True, True],
+        na_position="last",
+    )
+    best_index = int(comparison.iloc[0]["_candidate_index"])
+    comparison = comparison.drop(columns=["_candidate_index"]).reset_index(drop=True)
+    return {**candidates[best_index], "comparison": comparison}
+
+
+def nested_subject_cross_fitted(
+    frame: pd.DataFrame,
+    *,
+    feature_columns: list[str] | None = None,
+    outer_splits: int = 4,
+    inner_splits: int = 3,
+    random_state: int = 42,
+    C_values: list[float] | None = None,
+    class_weights: list[str | None] | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Đánh giá nested subject CV và trả về cross-fitted prediction của mọi subject."""
+    feature_columns = feature_columns or MODEL_FEATURES
+    outer_folds = make_subject_folds(frame, n_splits=outer_splits, random_state=random_state)
+    fold_rows: list[dict[str, Any]] = []
+    prediction_tables: list[pd.DataFrame] = []
+    selection_tables: list[pd.DataFrame] = []
+
+    for outer_fold, (fit_index, test_index) in enumerate(outer_folds, start=1):
+        outer_train = frame.iloc[fit_index].reset_index(drop=True)
+        outer_test = frame.iloc[test_index].reset_index(drop=True)
+        inner_folds = make_subject_folds(
+            outer_train,
+            n_splits=inner_splits,
+            random_state=random_state + outer_fold,
+        )
+        selected = search_logistic_configuration(
+            outer_train,
+            inner_folds,
+            feature_columns=feature_columns,
+            C_values=C_values,
+            class_weights=class_weights,
+            random_state=random_state + outer_fold,
+        )
+        model = make_logistic_pipeline(
+            C=selected["C"],
+            class_weight=selected["class_weight"],
+            random_state=random_state,
+        )
+        model.fit(outer_train[feature_columns], outer_train[TARGET_COLUMN])
+        test_scores = positive_score(model, outer_test[feature_columns])
+        subjects = aggregate_subject_predictions(
+            outer_test,
+            test_scores,
+            aggregation="median",
+            threshold=selected["threshold"],
+        )
+        fold_rows.append(
+            {
+                "Outer fold": outer_fold,
+                "Model": "Logistic Regression",
+                "Aggregation": "median",
+                "C": selected["C"],
+                "class_weight": selected["class_weight"],
+                "Threshold": selected["threshold"],
+                **calculate_metrics(
+                    subjects["status"],
+                    subjects["prediction"],
+                    subjects["probability"],
+                ),
+            }
+        )
+        prediction_tables.append(
+            subjects.rename(
+                columns={
+                    "recordings": "n_recordings",
+                    "probability": "subject_score",
+                }
+            )[
+                [
+                    SUBJECT_COLUMN,
+                    TARGET_COLUMN,
+                    "n_recordings",
+                    "subject_score",
+                    "prediction",
+                ]
+            ].assign(
+                outer_fold=outer_fold,
+                decision_threshold=float(selected["threshold"]),
+            )
+        )
+        selection_tables.append(selected["comparison"].assign(outer_fold=outer_fold))
+
+    predictions = pd.concat(prediction_tables, ignore_index=True)[
+        [
+            SUBJECT_COLUMN,
+            TARGET_COLUMN,
+            "outer_fold",
+            "n_recordings",
+            "subject_score",
+            "decision_threshold",
+            "prediction",
+        ]
+    ]
+    if predictions[SUBJECT_COLUMN].duplicated().any():
+        raise AssertionError(
+            "Mỗi subject phải xuất hiện đúng một lần trong cross-fitted predictions."
+        )
+    return (
+        pd.DataFrame(fold_rows),
+        predictions.sort_values(SUBJECT_COLUMN).reset_index(drop=True),
+        pd.concat(selection_tables, ignore_index=True),
+    )
 
 
 def fit_selection_rule(
     train_frame: pd.DataFrame,
     oof_probabilities: np.ndarray,
     *,
-    aggregation_candidates: tuple[str, ...] = ("mean", "median", "max"),
-    minimum_specificity: float = 0.5,
+    aggregation_candidates: tuple[str, ...] = ("median",),
+    minimum_specificity: float | None = None,
 ) -> tuple[str, float]:
-    """Tìm quy tắc gộp xác suất và ngưỡng quyết định tối ưu dựa trên OOF train."""
-    candidates = []
-
-    for aggregation in aggregation_candidates:
-        subjects = aggregate_subject_predictions(
-            train_frame,
-            oof_probabilities,
-            aggregation=aggregation,
-        )
-        threshold, _ = select_decision_threshold(
-            subjects,
-            minimum_specificity=minimum_specificity,
-        )
-        subjects["prediction"] = (subjects["probability"] >= threshold).astype(int)
-        metrics = calculate_metrics(
-            subjects["status"],
-            subjects["prediction"],
-            subjects["probability"],
-        )
-        candidates.append(
-            {
-                "Aggregation": aggregation,
-                "Selected threshold": threshold,
-                **metrics,
-            }
-        )
-
-    comparison = pd.DataFrame(candidates).sort_values(
-        ["Balanced Accuracy", "F1-macro", "Specificity"],
-        ascending=[False, False, False],
+    """Khóa median và threshold thống kê từ subject-level OOF."""
+    if aggregation_candidates != ("median",):
+        raise ValueError("Production chỉ cho phép aggregation='median'.")
+    subjects = aggregate_subject_predictions(train_frame, oof_probabilities, aggregation="median")
+    threshold, _ = select_decision_threshold(
+        subjects,
+        minimum_specificity=minimum_specificity,
     )
-    best = comparison.iloc[0]
-    return str(best["Aggregation"]), float(best["Selected threshold"])
+    return "median", threshold
 
 
 def fit_complete_pipeline(
@@ -261,154 +377,65 @@ def fit_complete_pipeline(
     train_frame: pd.DataFrame,
     *,
     feature_columns: list[str] | None = None,
-    n_splits: int = 5,
+    n_splits: int = 3,
     random_state: int = 42,
-) -> tuple[CalibratedClassifierCV, str, float]:
-    """Huấn luyện mô hình Calibrated Sigmoid lồng nhóm bệnh nhân và khóa quy tắc quyết định."""
-    if feature_columns is None:
-        feature_columns = MODEL_FEATURES
-
-    subject_table = build_subject_table(train_frame)
-    min_class_count = int(subject_table[TARGET_COLUMN].value_counts().min())
-    outer_n_splits = max(2, min(n_splits, min_class_count))
-
-    folds = make_subject_folds(
-        train_frame,
-        n_splits=outer_n_splits,
-        random_state=random_state,
-    )
-
-    oof_probabilities = np.full(len(train_frame), np.nan)
-
-    for fit_index, valid_index in folds:
-        fit_frame = train_frame.iloc[fit_index].reset_index(drop=True)
-        valid_frame = train_frame.iloc[valid_index]
-
-        fit_subjects = build_subject_table(fit_frame)
-        fit_min_class = int(fit_subjects[TARGET_COLUMN].value_counts().min())
-        inner_n_splits = max(2, min(3, fit_min_class))
-
-        inner_folds = make_subject_folds(
-            fit_frame,
-            n_splits=inner_n_splits,
-            random_state=random_state + 17,
-        )
-
-        calibrated = CalibratedClassifierCV(
-            estimator=clone(champion.estimator),
-            method="sigmoid",
-            cv=inner_folds,
-        )
-        calibrated.fit(fit_frame[feature_columns], fit_frame[TARGET_COLUMN])
-        oof_probabilities[valid_index] = positive_score(
-            calibrated,
-            valid_frame[feature_columns],
-        )
-
-    aggregation, threshold = fit_selection_rule(
-        train_frame,
-        oof_probabilities,
-    )
-
-    final_folds = make_subject_folds(
-        train_frame,
-        n_splits=outer_n_splits,
-        random_state=random_state + 42,
-    )
-    final_calibrated = CalibratedClassifierCV(
-        estimator=clone(champion.estimator),
-        method="sigmoid",
-        cv=final_folds,
-    )
-    final_calibrated.fit(train_frame[feature_columns], train_frame[TARGET_COLUMN])
-
-    return final_calibrated, aggregation, threshold
+) -> tuple[Any, str, float]:
+    """Fit model không calibration và khóa median/threshold từ group OOF."""
+    feature_columns = feature_columns or MODEL_FEATURES
+    folds = make_subject_folds(train_frame, n_splits=n_splits, random_state=random_state)
+    scores = _oof_recording_scores(train_frame, champion.estimator, folds, feature_columns)
+    subjects = aggregate_subject_predictions(train_frame, scores, aggregation="median")
+    threshold, _ = select_decision_threshold(subjects)
+    model = clone(champion.estimator)
+    model.fit(train_frame[feature_columns], train_frame[TARGET_COLUMN])
+    return model, "median", threshold
 
 
 def nested_subject_evaluation(
     frame: pd.DataFrame,
-    model_specs: dict[str, tuple[Any, dict[str, list[Any]]]],
+    model_specs: dict[str, tuple[Any, dict[str, list[Any]]]] | None = None,
     *,
     feature_columns: list[str] | None = None,
-    outer_splits: int = 5,
+    outer_splits: int = 4,
     inner_splits: int = 3,
     random_state: int = 42,
-) -> pd.DataFrame:
-    """Đánh giá lồng (Nested Cross-Validation) toàn bộ quy trình lựa chọn và hiệu chỉnh mô hình."""
-    if feature_columns is None:
-        feature_columns = MODEL_FEATURES
-
-    subject_table = build_subject_table(frame)
-    min_class_count = int(subject_table[TARGET_COLUMN].value_counts().min())
-    effective_outer_splits = max(2, min(outer_splits, min_class_count))
-
-    outer_folds = make_subject_folds(
+    return_predictions: bool = False,
+) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Chạy nested 4x3 canonical; model_specs chỉ giữ tương thích test cũ."""
+    C_values = None
+    class_weights = None
+    if model_specs:
+        logistic_spec = next(
+            (
+                (estimator, grid)
+                for name, (estimator, grid) in model_specs.items()
+                if "logistic" in name.lower()
+            ),
+            None,
+        )
+        if logistic_spec is not None:
+            estimator, grid = logistic_spec
+            C_values = [
+                float(value)
+                for value in grid.get(
+                    "model__C",
+                    [estimator.get_params().get("model__C", 1.0)],
+                )
+            ]
+            class_weights = grid.get(
+                "model__class_weight",
+                [estimator.get_params().get("model__class_weight")],
+            )
+    fold_metrics, predictions, selections = nested_subject_cross_fitted(
         frame,
-        n_splits=effective_outer_splits,
+        feature_columns=feature_columns,
+        outer_splits=outer_splits,
+        inner_splits=inner_splits,
         random_state=random_state,
+        C_values=C_values,
+        class_weights=class_weights,
     )
-
-    rows = []
-
-    for outer_fold, (outer_fit, outer_valid) in enumerate(
-        outer_folds,
-        start=1,
-    ):
-        outer_train = frame.iloc[outer_fit].reset_index(drop=True)
-        outer_validation = frame.iloc[outer_valid].reset_index(drop=True)
-
-        outer_train_subjects = build_subject_table(outer_train)
-        outer_train_min_class = int(outer_train_subjects[TARGET_COLUMN].value_counts().min())
-        effective_inner_splits = max(2, min(inner_splits, outer_train_min_class))
-
-        inner_folds = make_subject_folds(
-            outer_train,
-            n_splits=effective_inner_splits,
-            random_state=random_state + outer_fold,
-        )
-
-
-        champion = select_champion(
-            outer_train,
-            inner_folds,
-            model_specs,
-            feature_columns=feature_columns,
-        )
-
-        calibrated_model, aggregation, threshold = fit_complete_pipeline(
-            champion,
-            outer_train,
-            feature_columns=feature_columns,
-            n_splits=inner_splits,
-            random_state=random_state + outer_fold,
-        )
-
-        probabilities = positive_score(
-            calibrated_model,
-            outer_validation[feature_columns],
-        )
-
-        subjects = aggregate_subject_predictions(
-            outer_validation,
-            probabilities,
-            aggregation=aggregation,
-            threshold=threshold,
-        )
-
-        metrics = calculate_metrics(
-            subjects["status"],
-            subjects["prediction"],
-            subjects["probability"],
-        )
-
-        rows.append(
-            {
-                "Outer fold": outer_fold,
-                "Champion": champion.name,
-                "Aggregation": aggregation,
-                "Threshold": threshold,
-                **metrics,
-            }
-        )
-
-    return pd.DataFrame(rows)
+    result = fold_metrics.rename(columns={"Model": "Champion"})
+    if return_predictions:
+        return result, predictions, selections
+    return result
