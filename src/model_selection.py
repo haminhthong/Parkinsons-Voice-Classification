@@ -7,33 +7,21 @@ C, class_weight và threshold đều được chọn từ dữ liệu OOF của 
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 import pandas as pd
 from sklearn.base import clone
-from sklearn.model_selection import ParameterGrid
 
 from src.data import SUBJECT_COLUMN, TARGET_COLUMN
 from src.evaluate import (
     aggregate_subject_predictions,
     calculate_metrics,
     make_subject_folds,
-    positive_score,
     select_decision_threshold,
 )
 from src.features import MODEL_FEATURES, make_logistic_pipeline
-
-
-@dataclass
-class ChampionResult:
-    """Kết quả lựa chọn model của API tương thích; production luôn là Logistic Regression."""
-
-    name: str
-    estimator: Any
-    parameters: dict[str, Any]
-    metrics: dict[str, float]
+from src.utils import positive_class_probability
 
 
 def _oof_recording_scores(
@@ -48,141 +36,13 @@ def _oof_recording_scores(
         model = clone(estimator)
         fit_frame = frame.iloc[fit_index]
         model.fit(fit_frame[feature_columns], fit_frame[TARGET_COLUMN])
-        scores[valid_index] = positive_score(model, frame.iloc[valid_index][feature_columns])
+        scores[valid_index] = positive_class_probability(
+            model,
+            frame.iloc[valid_index][feature_columns],
+        )
     if np.isnan(scores).any():
         raise AssertionError("OOF chưa tạo score cho toàn bộ recording.")
     return scores
-
-
-def evaluate_parameter_set(
-    estimator,
-    parameters: dict[str, Any],
-    frame: pd.DataFrame,
-    folds: list[tuple[np.ndarray, np.ndarray]],
-    feature_columns: list[str],
-    *,
-    aggregation: str = "median",
-    threshold: float = 0.5,
-) -> pd.DataFrame:
-    """Đánh giá một estimator generic; dùng chủ yếu cho experiment tương thích."""
-    rows = []
-    for fold_number, (fit_index, valid_index) in enumerate(folds, start=1):
-        fit_frame = frame.iloc[fit_index]
-        valid_frame = frame.iloc[valid_index]
-        model = clone(estimator).set_params(**parameters)
-        model.fit(fit_frame[feature_columns], fit_frame[TARGET_COLUMN])
-        scores = positive_score(model, valid_frame[feature_columns])
-        subjects = aggregate_subject_predictions(
-            valid_frame,
-            scores,
-            aggregation=aggregation,
-            threshold=threshold,
-        )
-        rows.append(
-            {
-                "Fold": fold_number,
-                **calculate_metrics(
-                    subjects["status"],
-                    subjects["prediction"],
-                    subjects["probability"],
-                ),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def search_subject_level(
-    estimator,
-    parameter_grid: dict[str, list[Any]],
-    frame: pd.DataFrame,
-    folds: list[tuple[np.ndarray, np.ndarray]],
-    feature_columns: list[str],
-) -> tuple[pd.Series, pd.DataFrame]:
-    """Tìm tham số generic theo subject; benchmark ngoài production."""
-    candidates = []
-    for parameters in list(ParameterGrid(parameter_grid)) if parameter_grid else [{}]:
-        fold_table = evaluate_parameter_set(
-            estimator,
-            parameters,
-            frame,
-            folds,
-            feature_columns,
-        )
-        candidates.append(
-            {
-                "Parameters": parameters,
-                "Subject F1-macro mean": float(fold_table["F1-macro"].mean()),
-                "Subject F1-macro std": float(fold_table["F1-macro"].std(ddof=0)),
-                "Subject Balanced Accuracy mean": float(fold_table["Balanced Accuracy"].mean()),
-                "Subject ROC-AUC mean": float(fold_table["ROC-AUC"].mean()),
-            }
-        )
-    result = pd.DataFrame(candidates).sort_values(
-        [
-            "Subject Balanced Accuracy mean",
-            "Subject F1-macro mean",
-            "Subject ROC-AUC mean",
-        ],
-        ascending=False,
-    )
-    return result.iloc[0], result
-
-
-def _model_complexity_rank(name: str) -> int:
-    """Xếp hạng legacy để experiment cũ không bị lỗi import."""
-    return {
-        "Dummy": 0,
-        "Logistic Regression": 1,
-        "KNN": 2,
-        "Random Forest": 3,
-        "HistGradientBoosting": 4,
-    }.get(name, 10)
-
-
-def select_champion(
-    frame: pd.DataFrame,
-    folds: list[tuple[np.ndarray, np.ndarray]],
-    model_specs: dict[str, tuple[Any, dict[str, list[Any]]]],
-    *,
-    feature_columns: list[str] | None = None,
-    f1_tolerance: float = 0.005,
-) -> ChampionResult:
-    """API tương thích cho experiment; không được production dùng để chọn model."""
-    del f1_tolerance
-    feature_columns = feature_columns or MODEL_FEATURES
-    candidates = []
-    for name, (estimator, grid) in model_specs.items():
-        best, _ = search_subject_level(
-            estimator,
-            grid,
-            frame,
-            folds,
-            feature_columns,
-        )
-        candidates.append(
-            ChampionResult(
-                name=name,
-                estimator=clone(estimator).set_params(**best["Parameters"]),
-                parameters=best["Parameters"],
-                metrics={
-                    "Subject F1-macro mean": float(best["Subject F1-macro mean"]),
-                    "Subject F1-macro std": float(best["Subject F1-macro std"]),
-                    "Subject Balanced Accuracy mean": float(best["Subject Balanced Accuracy mean"]),
-                    "Subject ROC-AUC mean": float(best["Subject ROC-AUC mean"]),
-                },
-            )
-        )
-    if not candidates:
-        raise ValueError("model_specs không được rỗng.")
-    return max(
-        candidates,
-        key=lambda candidate: (
-            candidate.metrics["Subject Balanced Accuracy mean"],
-            candidate.metrics["Subject F1-macro mean"],
-            -candidate.metrics["Subject F1-macro std"],
-            -_model_complexity_rank(candidate.name),
-        ),
-    )
 
 
 def search_logistic_configuration(
@@ -192,6 +52,7 @@ def search_logistic_configuration(
     feature_columns: list[str] | None = None,
     C_values: list[float] | None = None,
     class_weights: list[str | None] | None = None,
+    max_iter: int = 3000,
     random_state: int = 42,
 ) -> dict[str, Any]:
     """Chọn C và class_weight chỉ bằng OOF subject-level của inner CV."""
@@ -205,6 +66,7 @@ def search_logistic_configuration(
             estimator = make_logistic_pipeline(
                 C=float(C),
                 class_weight=class_weight,
+                max_iter=max_iter,
                 random_state=random_state,
             )
             scores = _oof_recording_scores(frame, estimator, folds, feature_columns)
@@ -259,6 +121,7 @@ def nested_subject_cross_fitted(
     random_state: int = 42,
     C_values: list[float] | None = None,
     class_weights: list[str | None] | None = None,
+    max_iter: int = 3000,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     """Đánh giá nested subject CV và trả về cross-fitted prediction của mọi subject."""
     feature_columns = feature_columns or MODEL_FEATURES
@@ -281,15 +144,17 @@ def nested_subject_cross_fitted(
             feature_columns=feature_columns,
             C_values=C_values,
             class_weights=class_weights,
+            max_iter=max_iter,
             random_state=random_state + outer_fold,
         )
         model = make_logistic_pipeline(
             C=selected["C"],
             class_weight=selected["class_weight"],
+            max_iter=max_iter,
             random_state=random_state,
         )
         model.fit(outer_train[feature_columns], outer_train[TARGET_COLUMN])
-        test_scores = positive_score(model, outer_test[feature_columns])
+        test_scores = positive_class_probability(model, outer_test[feature_columns])
         subjects = aggregate_subject_predictions(
             outer_test,
             test_scores,
@@ -352,90 +217,3 @@ def nested_subject_cross_fitted(
         predictions.sort_values(SUBJECT_COLUMN).reset_index(drop=True),
         pd.concat(selection_tables, ignore_index=True),
     )
-
-
-def fit_selection_rule(
-    train_frame: pd.DataFrame,
-    oof_probabilities: np.ndarray,
-    *,
-    aggregation_candidates: tuple[str, ...] = ("median",),
-    minimum_specificity: float | None = None,
-) -> tuple[str, float]:
-    """Khóa median và threshold thống kê từ subject-level OOF."""
-    if aggregation_candidates != ("median",):
-        raise ValueError("Production chỉ cho phép aggregation='median'.")
-    subjects = aggregate_subject_predictions(train_frame, oof_probabilities, aggregation="median")
-    threshold, _ = select_decision_threshold(
-        subjects,
-        minimum_specificity=minimum_specificity,
-    )
-    return "median", threshold
-
-
-def fit_complete_pipeline(
-    champion: ChampionResult,
-    train_frame: pd.DataFrame,
-    *,
-    feature_columns: list[str] | None = None,
-    n_splits: int = 3,
-    random_state: int = 42,
-) -> tuple[Any, str, float]:
-    """Fit model không calibration và khóa median/threshold từ group OOF."""
-    feature_columns = feature_columns or MODEL_FEATURES
-    folds = make_subject_folds(train_frame, n_splits=n_splits, random_state=random_state)
-    scores = _oof_recording_scores(train_frame, champion.estimator, folds, feature_columns)
-    subjects = aggregate_subject_predictions(train_frame, scores, aggregation="median")
-    threshold, _ = select_decision_threshold(subjects)
-    model = clone(champion.estimator)
-    model.fit(train_frame[feature_columns], train_frame[TARGET_COLUMN])
-    return model, "median", threshold
-
-
-def nested_subject_evaluation(
-    frame: pd.DataFrame,
-    model_specs: dict[str, tuple[Any, dict[str, list[Any]]]] | None = None,
-    *,
-    feature_columns: list[str] | None = None,
-    outer_splits: int = 4,
-    inner_splits: int = 3,
-    random_state: int = 42,
-    return_predictions: bool = False,
-) -> pd.DataFrame | tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    """Chạy nested 4x3 canonical; model_specs chỉ giữ tương thích test cũ."""
-    C_values = None
-    class_weights = None
-    if model_specs:
-        logistic_spec = next(
-            (
-                (estimator, grid)
-                for name, (estimator, grid) in model_specs.items()
-                if "logistic" in name.lower()
-            ),
-            None,
-        )
-        if logistic_spec is not None:
-            estimator, grid = logistic_spec
-            C_values = [
-                float(value)
-                for value in grid.get(
-                    "model__C",
-                    [estimator.get_params().get("model__C", 1.0)],
-                )
-            ]
-            class_weights = grid.get(
-                "model__class_weight",
-                [estimator.get_params().get("model__class_weight")],
-            )
-    fold_metrics, predictions, selections = nested_subject_cross_fitted(
-        frame,
-        feature_columns=feature_columns,
-        outer_splits=outer_splits,
-        inner_splits=inner_splits,
-        random_state=random_state,
-        C_values=C_values,
-        class_weights=class_weights,
-    )
-    result = fold_metrics.rename(columns={"Model": "Champion"})
-    if return_predictions:
-        return result, predictions, selections
-    return result

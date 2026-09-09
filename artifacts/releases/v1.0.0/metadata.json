@@ -18,7 +18,7 @@
     "C": 0.01,
     "class_weight": "balanced"
   },
-  "sklearn_version": "1.9.0",
-  "git_commit": "b866d7ca21beb81ee61e8f623c34990a10f318a4",
+  "sklearn_version": "1.7.1",
+  "git_commit": "8feaccda22accd5e53c781bd9e12aa2abdf75e64",
   "scope": "research-only"
 }

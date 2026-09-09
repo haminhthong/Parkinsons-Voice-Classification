@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-SUPPORTED_AGGREGATIONS = ("mean", "median", "max")
+SUPPORTED_AGGREGATIONS = ("median",)
 
 
 def sha256_file(path: str | Path) -> str:
@@ -53,9 +53,8 @@ def positive_class_probability(model, features) -> np.ndarray:
 
 def normalize_aggregation(aggregation: str) -> str:
     """Chuẩn hóa và kiểm tra tên quy tắc gộp xác suất theo bệnh nhân."""
-    normalized = "mean" if aggregation == "mean_by_subject" else aggregation
-    if normalized not in SUPPORTED_AGGREGATIONS:
+    if aggregation not in SUPPORTED_AGGREGATIONS:
         raise ValueError(
             f"Cách gộp {aggregation!r} không hợp lệ; chọn một trong {list(SUPPORTED_AGGREGATIONS)}."
         )
-    return normalized
+    return aggregation

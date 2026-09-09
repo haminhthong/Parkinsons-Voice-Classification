@@ -24,7 +24,7 @@ from sklearn.metrics import (
 from sklearn.model_selection import StratifiedKFold
 
 from src.data import SUBJECT_COLUMN, TARGET_COLUMN, build_subject_table
-from src.utils import normalize_aggregation, positive_class_probability
+from src.utils import normalize_aggregation
 
 
 def make_subject_folds(
@@ -91,27 +91,6 @@ def make_subject_folds(
         folds.append((fit_index, valid_index))
 
     return folds
-
-
-def positive_score(estimator, features: pd.DataFrame) -> np.ndarray:
-    """Trích xuất xác suất lớp dương (status=1) hoặc điểm quyết định (decision_function).
-
-    Args:
-        estimator: Mô hình đã được huấn luyện (scikit-learn Pipeline hoặc Classifier).
-        features: Các đặc trưng đầu vào dưới dạng DataFrame.
-
-    Returns:
-        np.ndarray: Mảng 1 chiều chứa xác suất hoặc điểm quyết định cho lớp dương.
-
-    Raises:
-        TypeError: Nếu mô hình không hỗ trợ `predict_proba` lẫn `decision_function`.
-    """
-
-    if hasattr(estimator, "predict_proba"):
-        return positive_class_probability(estimator, features)
-    if hasattr(estimator, "decision_function"):
-        return np.asarray(estimator.decision_function(features), dtype=float)
-    raise TypeError("Mô hình không cung cấp phương thức predict_proba hoặc decision_function.")
 
 
 def calculate_metrics(y_true, y_pred, y_score) -> dict[str, float]:
@@ -194,15 +173,11 @@ def aggregate_subject_predictions(
 ) -> pd.DataFrame:
     """Gộp recording scores thành score và decision ở cấp subject.
 
-    Production v1 khóa ``median``. ``mean`` và ``max`` chỉ còn để tái hiện
-    experiment cũ, không được dùng để chọn cấu hình triển khai.
-
-
     Args:
         frame: DataFrame chứa cột `subject_id` và `status`.
         probabilities: Mảng xác suất dự đoán của từng bản ghi âm.
         threshold: Ngưỡng quyết định nhị phân (mặc định 0.5).
-        aggregation: Quy tắc gộp xác suất ('mean', 'median', 'max').
+        aggregation: Quy tắc gộp xác suất; production chỉ dùng `median`.
 
     Returns:
         pd.DataFrame: Bảng kết quả tổng hợp theo bệnh nhân.
@@ -211,6 +186,8 @@ def aggregate_subject_predictions(
         ValueError: Nếu tên quy tắc gộp không nằm trong danh sách hỗ trợ.
     """
     aggregation = normalize_aggregation(aggregation)
+    if not 0 <= threshold <= 1:
+        raise ValueError("threshold phải nằm trong [0, 1].")
     probabilities = np.asarray(probabilities, dtype=float)
     if len(frame) != len(probabilities):
         raise ValueError("Số recording và số score phải bằng nhau.")
@@ -234,43 +211,16 @@ def aggregate_subject_predictions(
     return subjects
 
 
-def evaluate_subject_fold(
-    estimator,
-    validation_frame: pd.DataFrame,
-    probabilities: np.ndarray,
-    *,
-    aggregation: str = "median",
-    threshold: float = 0.5,
-) -> dict[str, float]:
-    """Đánh giá một validation fold ở cấp độ bệnh nhân."""
-    subjects = aggregate_subject_predictions(
-        validation_frame,
-        probabilities,
-        aggregation=aggregation,
-        threshold=threshold,
-    )
-
-    return calculate_metrics(
-        subjects["status"],
-        subjects["prediction"],
-        subjects["probability"],
-    )
-
-
 def select_decision_threshold(
     subjects: pd.DataFrame,
-    *,
-    minimum_specificity: float | None = None,
 ) -> tuple[float, pd.DataFrame]:
     """Tìm ngưỡng thống kê tối ưu trên subject-level OOF.
 
-    Mục tiêu canonical là Balanced Accuracy, không có ``minimum_specificity``
-    mang ý nghĩa lâm sàng. Tham số tùy chọn chỉ giữ để chạy lại experiment cũ.
+    Mục tiêu canonical là Balanced Accuracy. Đây là threshold thống kê cho
+    nghiên cứu, không phải một ngưỡng vận hành lâm sàng.
 
     Args:
         subjects: DataFrame đã gộp dự đoán ở cấp độ bệnh nhân.
-        minimum_specificity: Ràng buộc legacy tùy chọn; production truyền ``None``.
-
     Returns:
         tuple[float, pd.DataFrame]: Ngưỡng tối ưu và bảng tìm kiếm ứng viên.
     """
@@ -320,17 +270,8 @@ def select_decision_threshold(
         )
 
     table = pd.DataFrame(rows)
-    # Lọc danh sách ứng viên thỏa mãn chỉ tiêu Specificity tối thiểu
-    eligible = table
-    if minimum_specificity is not None:
-        if not 0 <= minimum_specificity <= 1:
-            raise ValueError("minimum_specificity phải nằm trong [0, 1].")
-        constrained = table[table["Specificity"] >= minimum_specificity]
-        if not constrained.empty:
-            eligible = constrained
-
     # Xếp hạng ứng viên theo thứ tự ưu tiên: Balanced Accuracy -> F1-macro -> Specificity
-    ranked = eligible.assign(distance_from_default=(eligible["Threshold"] - 0.5).abs()).sort_values(
+    ranked = table.assign(distance_from_default=(table["Threshold"] - 0.5).abs()).sort_values(
         ["Balanced Accuracy", "F1-macro", "Specificity", "distance_from_default"],
         ascending=[False, False, False, True],
     )

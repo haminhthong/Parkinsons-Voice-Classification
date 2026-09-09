@@ -9,7 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import joblib
+import numpy as np
 import pandas as pd
+import sklearn
 
 from src.data import ID_COLUMN, SUBJECT_COLUMN, validate_dataframe
 from src.features import MODEL_FEATURES, ORIGINAL_FEATURES
@@ -38,12 +40,18 @@ def load_bundle(path: str | Path) -> dict:
         "aggregation",
         "model_version",
         "schema_version",
+        "sklearn_version",
     }
     missing = required.difference(bundle)
     if missing:
         raise ValueError(f"Artifact thiếu siêu dữ liệu bắt buộc: {sorted(missing)}")
     if int(bundle["schema_version"]) != 2:
         raise ValueError("Artifact không dùng schema version 2.")
+    if str(bundle["sklearn_version"]) != sklearn.__version__:
+        raise ValueError(
+            "Artifact được tạo bằng scikit-learn "
+            f"{bundle['sklearn_version']}, runtime đang dùng {sklearn.__version__}."
+        )
     if list(bundle["feature_columns"]) != MODEL_FEATURES:
         raise ValueError("Artifact feature schema không khớp chính xác với runtime.")
     if bundle["aggregation"] != "median":
@@ -84,6 +92,21 @@ def _prepare_inference_frame(frame: pd.DataFrame) -> pd.DataFrame:
         prepared["Shimmer:DDA"] = prepared["Shimmer:APQ3"] * 3.0
 
     validated = validate_dataframe(prepared, require_target=False, require_name=True)
+    redundant_relations = {
+        "Jitter:DDP": ("MDVP:RAP", 3.0),
+        "Shimmer:DDA": ("Shimmer:APQ3", 3.0),
+    }
+    for derived, (base, multiplier) in redundant_relations.items():
+        if derived in frame.columns and not np.allclose(
+            validated[derived].to_numpy(dtype=float),
+            validated[base].to_numpy(dtype=float) * multiplier,
+            # Dataset nguồn lưu các feature dẫn xuất đã làm tròn đến 5 chữ số.
+            rtol=1e-4,
+            atol=2e-5,
+        ):
+            raise ValueError(
+                f"Feature dẫn xuất {derived!r} không khớp quan hệ đại số với {base!r}."
+            )
     supplied_subjects = frame.get(SUBJECT_COLUMN)
     if supplied_subjects is not None:
         expected = validated[SUBJECT_COLUMN].astype(str).reset_index(drop=True)

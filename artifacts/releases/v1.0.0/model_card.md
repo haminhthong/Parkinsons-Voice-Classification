@@ -15,8 +15,8 @@ xuất đặc trưng âm thanh.
 
 ## Đánh giá
 
-- Nested stratified subject CV: 4 outer × 3 inner trên 32 subject; mỗi subject làm
-  outer-test đúng một lần.
+- Nested stratified subject CV: 4 outer × 3 inner trên
+  32 subject; mỗi subject làm outer-test đúng một lần.
 - Primary metric: Balanced Accuracy = 0.6250.
 - Macro-F1 = 0.6135; ROC-AUC = 0.7396.
 - Bootstrap 95% CI dùng 5.000 mẫu ở cấp subject; đây là ước lượng nghiên cứu nội bộ.

@@ -40,6 +40,10 @@ from src.utils import sha256_file
 CONFIG_PATH = Path(__file__).parents[1] / "configs" / "default.json"
 DEFAULT_CONFIG = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 RANDOM_STATE = int(DEFAULT_CONFIG["random_state"])
+AGGREGATION = str(DEFAULT_CONFIG["aggregation"])
+MAX_ITER = int(DEFAULT_CONFIG["model"]["max_iter"])
+if AGGREGATION != "median":
+    raise ValueError("configs/default.json phải khóa aggregation='median'.")
 
 
 def _git_commit(project_root: Path) -> str:
@@ -90,6 +94,7 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
         random_state=RANDOM_STATE,
         C_values=C_values,
         class_weights=class_weights,
+        max_iter=MAX_ITER,
     )
     cross_fitted_metrics = calculate_metrics(
         cross_fitted[TARGET_COLUMN],
@@ -114,13 +119,14 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
         feature_columns=MODEL_FEATURES,
         C_values=C_values,
         class_weights=class_weights,
+        max_iter=MAX_ITER,
         random_state=RANDOM_STATE,
     )
     final_model = make_logistic_pipeline(
         C=full_selection["C"],
         class_weight=full_selection["class_weight"],
         random_state=RANDOM_STATE,
-        max_iter=int(DEFAULT_CONFIG["model"]["max_iter"]),
+        max_iter=MAX_ITER,
     )
     final_model.fit(frame[MODEL_FEATURES], frame[TARGET_COLUMN])
 
@@ -150,7 +156,7 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
         "model_version": model_version,
         "model_type": "logistic_regression",
         "feature_count": len(MODEL_FEATURES),
-        "aggregation": "median",
+        "aggregation": AGGREGATION,
         "decision_threshold": float(full_selection["threshold"]),
         "dataset_sha256": data_sha256,
         "evaluation_protocol": {
@@ -188,8 +194,8 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
         "original_feature_columns": ORIGINAL_FEATURES,
         "dropped_redundant_features": REDUNDANT_FEATURES,
         "decision_threshold": float(full_selection["threshold"]),
-        "aggregation": "median",
-        "probability_aggregation": "median",
+        "aggregation": AGGREGATION,
+        "probability_aggregation": AGGREGATION,
         "training_feature_ranges": feature_ranges,
         "feature_p1_p99": feature_ranges,
         "training_recordings_per_subject": training_recordings,
@@ -212,16 +218,11 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
     }
 
     joblib.dump(bundle, release_dir / "model.joblib")
-    joblib.dump(bundle, output / "model.joblib")
-    joblib.dump(bundle, output / "parkinsons_calibrated_pipeline.joblib")
     cross_fitted.to_csv(evaluation_dir / "cross_fitted_subject_predictions.csv", index=False)
     fold_metrics.to_csv(evaluation_dir / "fold_metrics.csv", index=False)
     selection_table.to_csv(evaluation_dir / "inner_selection.csv", index=False)
     confidence_intervals.to_csv(evaluation_dir / "bootstrap_ci.csv", index=False)
     full_selection["threshold_table"].to_csv(evaluation_dir / "threshold_search.csv", index=False)
-    cross_fitted.to_csv(output / "oof_subject_predictions.csv", index=False)
-    fold_metrics.to_csv(output / "nested_cv_results.csv", index=False)
-    confidence_intervals.to_csv(output / "bootstrap_ci.csv", index=False)
 
     (release_dir / "metadata.json").write_text(
         json.dumps(metadata, ensure_ascii=False, indent=2),
@@ -241,7 +242,7 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
             "C": full_selection["C"],
             "class_weight": full_selection["class_weight"],
             "threshold": full_selection["threshold"],
-            "aggregation": "median",
+            "aggregation": AGGREGATION,
         },
     }
     (release_dir / "evaluation.json").write_text(
@@ -291,7 +292,7 @@ xuất đặc trưng âm thanh.
         "deployment_oof": {
             **final_oof_metrics,
             "decision_threshold": float(full_selection["threshold"]),
-            "aggregation": "median",
+            "aggregation": AGGREGATION,
         },
         "evaluation_protocol": metadata["evaluation_protocol"],
         "artifact": "releases/v1.0.0/model.joblib",

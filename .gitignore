@@ -173,6 +173,9 @@ cython_debug/
 reports/.pytest-cache/
 reports/.pytest-tmp/
 
+# Temporary directories when pytest is run with a short Windows path.
+pytest-tmp*/
+
 # PyPI configuration file
 
 # PyPI configuration file

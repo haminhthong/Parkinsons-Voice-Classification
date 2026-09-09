@@ -26,7 +26,7 @@
 ## 3. Training & Evaluation Data
 
 - **Dataset Source:** [UCI Machine Learning Repository: Parkinsons Telemonitoring / Voice Dataset](https://archive.ics.uci.edu/dataset/174/parkinsons).
-- **Cohort Size:** 195 acoustic recordings from **32 distinct subjects** (24 diagnosed with Parkinson's Disease, 8 Healthy Controls). Each subject provided 5–6 sustained vowel phonations.
+- **Cohort Size:** 195 acoustic recordings from **32 distinct subjects** (24 subjects with `status=1`, 8 with `status=0`). Each subject provided 6–7 sustained vowel phonations.
 - **Data Partitioning (Zero-Leakage Invariant):**
 - **Evaluation Cohort:** All 32 subjects are used by nested 4-fold outer CV; each subject is outer-test exactly once.
 - **Inner Selection:** Three subject-level inner folds tune only `C` and `class_weight`.

@@ -8,12 +8,17 @@ import json
 import zipfile
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path.cwd()
+if not (ROOT / "src").is_dir():
+    ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "notebooks" / "02_colab_reproducible.ipynb"
 INCLUDED_FILES = [
     "configs/default.json",
     "data/parkinsons.csv",
-    *[str(path.relative_to(ROOT)).replace("\\", "/") for path in (ROOT / "src").glob("*.py")],
+    *[
+        str(path.relative_to(ROOT)).replace("\\", "/")
+        for path in sorted((ROOT / "src").glob("*.py"))
+    ],
 ]
 
 
@@ -22,7 +27,10 @@ def make_payload() -> str:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
         for relative_path in INCLUDED_FILES:
-            archive.write(ROOT / relative_path, relative_path)
+            path = ROOT / relative_path
+            info = zipfile.ZipInfo(relative_path, date_time=(2020, 1, 1, 0, 0, 0))
+            info.compress_type = zipfile.ZIP_DEFLATED
+            archive.writestr(info, path.read_bytes())
     return base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
@@ -56,33 +64,32 @@ def build() -> Path:
         md("""
 # Leakage-Aware Parkinson’s Voice Classification — Google Colab
 
-Notebook tự chứa này chạy đúng code của repository: kiểm tra 22 đặc trưng, chia theo bệnh nhân,
-benchmark 6 mô hình, calibration theo nhóm, chọn cách gộp/ngưỡng trên OOF train và đánh giá holdout.
+Notebook này tái lập đúng quy trình canonical của repository: dữ liệu bảng gồm 22
+đặc trưng acoustic được kiểm tra, loại 2 đặc trưng dư thừa còn 20 đặc trưng cố định,
+sau đó đánh giá bằng nested stratified subject CV (4 outer × 3 inner). Production chỉ
+dùng `StandardScaler → LogisticRegression`, gộp median ở cấp subject và chọn threshold
+từ OOF train.
 
-**Kết quả chuẩn:** champion `KNN + sigmoid calibration`, gộp `max`, ngưỡng `0.835`,
-holdout Accuracy `0.875`, Balanced Accuracy `0.750`, ROC-AUC `0.750`.
-
-> Chỉ phục vụ nghiên cứu và học tập, không dùng để chẩn đoán. Chọn **Runtime → Run all**.
+Đây là prototype nghiên cứu/sàng lọc, không phải công cụ chẩn đoán. Chọn **Runtime → Run all**.
 """),
         md("## 1. Khóa môi trường chạy"),
         py("""
 import os, subprocess, sys
 IN_COLAB = "google.colab" in sys.modules
 PACKAGES = [
-    "pandas==2.2.3", "numpy==2.1.3", "scikit-learn==1.5.2",
-    "joblib==1.4.2", "matplotlib==3.9.2", "seaborn==0.13.2",
+    "pandas==2.2.3", "numpy==2.1.3", "scikit-learn==1.7.1",
+    "joblib==1.4.2", "matplotlib==3.9.2",
 ]
 if IN_COLAB:
     subprocess.run([sys.executable, "-m", "pip", "install", "-q", *PACKAGES], check=True)
 os.environ.setdefault("MPLBACKEND", "Agg")
-os.environ.setdefault("LOKY_MAX_CPU_COUNT", "2")
 print("Môi trường:", "Google Colab" if IN_COLAB else "Python cục bộ")
 """),
         md("""
 ## 2. Khôi phục dự án tối thiểu
 
-Dữ liệu, cấu hình và các module `src` được nhúng trong notebook nên không phụ thuộc Google Drive,
-đường dẫn Windows hoặc GitHub. Đây là bản chụp của code repository tại thời điểm tạo notebook.
+Notebook tự chứa dữ liệu, cấu hình và toàn bộ module `src` cần cho audit, train và
+inference. Không phụ thuộc đường dẫn Windows, Google Drive hoặc GitHub.
 """),
         py(f"""
 import base64, io, shutil, zipfile
@@ -105,113 +112,98 @@ print("Thư mục chạy:", PROJECT_DIR)
 """),
         md("## 3. Kiểm tra phiên bản, checksum và schema"),
         py("""
-import joblib, matplotlib, numpy as np, pandas as pd, sklearn
+import json, joblib, numpy as np, pandas as pd, sklearn
 from src.data import ORIGINAL_FEATURES, SUBJECT_COLUMN, TARGET_COLUMN, load_data
+from src.features import MODEL_FEATURES, REDUNDANT_FEATURES
 from src.utils import sha256_file
 
 expected_versions = {
-    "pandas": "2.2.3", "numpy": "2.1.3", "scikit-learn": "1.5.2",
-    "joblib": "1.4.2", "matplotlib": "3.9.2",
+    "pandas": "2.2.3", "numpy": "2.1.3", "scikit-learn": "1.7.1",
+    "joblib": "1.4.2",
 }
 actual_versions = {
     "pandas": pd.__version__, "numpy": np.__version__, "scikit-learn": sklearn.__version__,
-    "joblib": joblib.__version__, "matplotlib": matplotlib.__version__,
+    "joblib": joblib.__version__,
 }
 if IN_COLAB:
     assert actual_versions == expected_versions, (actual_versions, expected_versions)
 DATA_PATH = Path("data/parkinsons.csv")
-assert sha256_file(DATA_PATH) == "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6"
+DATA_SHA256 = "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6"
+assert sha256_file(DATA_PATH) == DATA_SHA256
 frame = load_data(DATA_PATH)
-assert len(ORIGINAL_FEATURES) == 22
+assert len(frame) == 195 and frame[SUBJECT_COLUMN].nunique() == 32
+assert len(ORIGINAL_FEATURES) == 22 and len(MODEL_FEATURES) == 20
+assert set(REDUNDANT_FEATURES) == {"Jitter:DDP", "Shimmer:DDA"}
 assert set(frame[TARGET_COLUMN].unique()) == {0, 1}
-assert frame[SUBJECT_COLUMN].nunique() == 32
-print(f"✅ {len(frame)} bản ghi | 32 bệnh nhân | 22 đặc trưng | checksum đúng")
+print(f"✅ {len(frame)} recordings | 32 subjects | 22 source features | 20 model features")
 display(frame.head(3))
 """),
-        md("## 4. Audit chống rò rỉ bệnh nhân"),
+        md("## 4. Audit phân chia theo subject"),
         py("""
-from src.data import subject_holdout_split
+from src.audit import build_data_manifest
 from src.evaluate import make_subject_folds
 
-train_frame, test_frame = subject_holdout_split(frame, test_size=0.25, random_state=42)
-train_ids, test_ids = set(train_frame[SUBJECT_COLUMN]), set(test_frame[SUBJECT_COLUMN])
-assert train_ids.isdisjoint(test_ids)
-folds = make_subject_folds(train_frame, n_splits=5, random_state=42)
+manifest = build_data_manifest(frame, DATA_PATH)
+assert manifest["duplicate_recording_names"] == 0
+assert manifest["duplicate_full_feature_vectors"] == 0
+folds = make_subject_folds(frame, n_splits=4, random_state=42)
 for number, (fit_index, valid_index) in enumerate(folds, 1):
-    fit_ids = set(train_frame.iloc[fit_index][SUBJECT_COLUMN])
-    valid_ids = set(train_frame.iloc[valid_index][SUBJECT_COLUMN])
+    fit_ids = set(frame.iloc[fit_index][SUBJECT_COLUMN])
+    valid_ids = set(frame.iloc[valid_index][SUBJECT_COLUMN])
     assert fit_ids.isdisjoint(valid_ids)
-    assert train_frame.iloc[valid_index][TARGET_COLUMN].nunique() == 2
-    print(f"Fold {number}: không overlap, validation đủ hai lớp")
-print(f"✅ Holdout: train={len(train_ids)}, test={len(test_ids)}, overlap=0")
+    assert frame.iloc[valid_index][TARGET_COLUMN].nunique() == 2
+    print(f"Fold {number}: subject disjoint, validation đủ hai lớp")
+print("✅ Không có overlap subject trong outer CV")
 """),
-        md("""
-## 5. Huấn luyện và benchmark
-
-Scaler và SelectKBest nằm trong Pipeline. Holdout không tham gia chọn champion, calibration,
-quy tắc gộp hoặc threshold. Cell này có thể mất vài phút trên CPU Colab.
-"""),
+        md("## 5. Huấn luyện canonical và sinh artifact"),
         py("""
 from src.train import train
+
 ARTIFACT_DIR = Path("artifacts")
-benchmark = train(DATA_PATH, ARTIFACT_DIR)
-display(benchmark[[
-    "Model", "Subject F1-macro mean", "Subject F1-macro std",
-    "Subject Balanced Accuracy mean", "Subject ROC-AUC mean",
-]])
+comparison = train(DATA_PATH, ARTIFACT_DIR)
+display(comparison)
 """),
-        md("## 6. Assert kết quả trùng repository"),
+        md("## 6. Kiểm tra kết quả và artifact release"),
         py(f"""
-import json
+from src.predict import load_bundle
+
 EXPECTED = json.loads({json.dumps(expected_metrics, ensure_ascii=False)})
 ACTUAL = json.loads((ARTIFACT_DIR / "metrics.json").read_text(encoding="utf-8"))
-assert ACTUAL["selection"]["champion"] == EXPECTED["selection"]["champion"]
-assert ACTUAL["holdout_subject"]["Accuracy"] == EXPECTED["holdout_subject"]["Accuracy"]
-assert np.isclose(ACTUAL["holdout_subject"]["Balanced Accuracy"], EXPECTED["holdout_subject"]["Balanced Accuracy"], rtol=0, atol=1e-12)
-print("✅ KHỚP HOÀN TOÀN VỚI KẾT QUẢ REPOSITORY")
+assert ACTUAL["dataset"]["dataset_sha256"] == EXPECTED["dataset"]["dataset_sha256"]
+assert ACTUAL["dataset"]["n_recordings"] == 195
+assert ACTUAL["dataset"]["n_subjects"] == 32
+assert ACTUAL["selection"] == EXPECTED["selection"]
+for metric in ("Balanced Accuracy", "F1-macro", "ROC-AUC"):
+    assert np.isclose(
+        ACTUAL["nested_cv_subject"][metric],
+        EXPECTED["nested_cv_subject"][metric],
+        rtol=0,
+        atol=1e-12,
+    )
+bundle = load_bundle(ARTIFACT_DIR / "releases" / "v1.0.0" / "model.joblib")
+assert bundle["feature_columns"] == MODEL_FEATURES
+assert bundle["aggregation"] == "median"
+print("✅ Kết quả canonical và release model khớp repository")
 print(json.dumps(ACTUAL, ensure_ascii=False, indent=2))
 """),
-        md("## 7. Holdout, khoảng tin cậy và biểu đồ"),
-        py("""
-from src.report import create_portfolio_figures
-
-display(pd.read_csv(ARTIFACT_DIR / "holdout_subject_predictions.csv"))
-display(pd.read_csv(ARTIFACT_DIR / "holdout_bootstrap_ci.csv"))
-figure_paths = create_portfolio_figures(ARTIFACT_DIR, Path("reports/figures"))
-if IN_COLAB:
-    from IPython.display import Image
-    for figure_path in figure_paths:
-        display(Image(filename=str(figure_path), width=850))
-else:
-    print("Biểu đồ:", *figure_paths, sep="\\n- ")
-"""),
-        md("""
-## 8. Dự đoán CSV mới — tùy chọn
-
-CSV phải có cột `name` và đủ 22 đặc trưng. Không nhập đặc trưng thủ công.
-"""),
+        md("## 7. Suy luận dữ liệu mới — tùy chọn"),
         py("""
 from src.predict import load_bundle, predict_records
-if IN_COLAB:
-    from google.colab import files
-    uploaded = files.upload()
-    if uploaded:
-        name = next(iter(uploaded))
-        inference_frame = pd.read_csv(io.BytesIO(uploaded[name]))
-        bundle = load_bundle(ARTIFACT_DIR / "parkinsons_calibrated_pipeline.joblib")
-        record_results, subject_results = predict_records(inference_frame, bundle)
-        display(subject_results)
-        subject_results.to_csv("parkinsons_subject_predictions.csv", index=False)
-        files.download("parkinsons_subject_predictions.csv")
-else:
-    print("Cell upload chỉ kích hoạt trên Google Colab.")
+
+inference_frame = frame.drop(columns=[TARGET_COLUMN, SUBJECT_COLUMN])
+record_results, subject_results = predict_records(inference_frame, bundle)
+assert "screening_score" in record_results
+assert "subject_screening_score" in subject_results
+display(subject_results.head())
+print("Input inference chỉ dùng name và feature; không truyền status.")
 """),
         md("""
 ## Kết luận
 
-Khi xuất hiện dòng **KHỚP HOÀN TOÀN**, notebook đã dùng cùng dữ liệu, code, seed và phiên bản
-thư viện để tái lập repository. Trong CV, nên nhấn mạnh việc sửa group leakage và công bố bất định
-do cỡ mẫu nhỏ thay vì chỉ nêu Accuracy.
+Notebook hoàn tất khi tất cả assertion màu xanh: checksum/schema đúng, outer CV không
+overlap subject, kết quả nested CV khớp artifact và release model dùng đúng 20-feature
+contract. Các score chỉ là tín hiệu nghiên cứu; cần cohort ngoài và validation lâm sàng
+trước mọi diễn giải y tế.
 """),
     ]
     OUTPUT.write_text(json.dumps(notebook, ensure_ascii=False, indent=1), encoding="utf-8")

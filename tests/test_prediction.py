@@ -1,5 +1,6 @@
 import joblib
 import numpy as np
+import sklearn
 
 from src.data import TARGET_COLUMN
 from src.predict import load_bundle, predict_records, predict_subject_records
@@ -49,6 +50,7 @@ def test_artifact_contains_environment_metadata(artifact_path):
     }
 
     assert required.issubset(bundle)
+    assert bundle["sklearn_version"] == sklearn.__version__
 
 
 def test_predict_subject_records_produces_structured_report(frame, artifact_path):

@@ -17,4 +17,4 @@ def frame(data_path):
 
 @pytest.fixture(scope="session")
 def artifact_path() -> Path:
-    return Path(__file__).parents[1] / "artifacts" / "parkinsons_calibrated_pipeline.joblib"
+    return Path(__file__).parents[1] / "artifacts" / "releases" / "v1.0.0" / "model.joblib"

@@ -45,13 +45,9 @@ def compute_feature_percentiles(
     }
 
 
-def make_pipeline(model: BaseEstimator, *, scale: bool = True) -> Pipeline:
-    """Tạo pipeline tiền xử lý và estimator mà không có bước chọn feature.
-
-    ``scale`` được giữ để tương thích với experiment cũ. Production luôn dùng
-    ``StandardScaler``; scaler nằm trong pipeline để chỉ fit trên fold train.
-    """
-    return Pipeline([("scale", StandardScaler() if scale else "passthrough"), ("model", model)])
+def make_pipeline(model: BaseEstimator) -> Pipeline:
+    """Tạo pipeline chuẩn hóa và estimator, không có bước chọn feature."""
+    return Pipeline([("scale", StandardScaler()), ("model", model)])
 
 
 def make_logistic_pipeline(

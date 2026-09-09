@@ -3,8 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import sys
+from pathlib import Path
 
 import pandas as pd
+
+# Cho phép chạy trực tiếp ``python scripts/predict.py`` từ thư mục repo.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.settings import ARTIFACT_PATH
 from src.predict import load_bundle, predict_records

@@ -1,9 +1,4 @@
-"""Nạp, kiểm tra schema và quản lý subject identity.
-
-Cung cấp các hàm kiểm tra tính hợp lệ của dữ liệu (schema validation), trích xuất mã bệnh nhân
-(subject_id) từ tên tệp ghi âm, và thực hiện phân chia tập dữ liệu ở cấp độ bệnh nhân
-(Patient-level split) nhằm chống rò rỉ dữ liệu (Data Leakage).
-"""
+"""Nạp dữ liệu, kiểm tra schema và quản lý subject identity."""
 
 from __future__ import annotations
 
@@ -12,7 +7,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from sklearn.model_selection import train_test_split
 
 # Tên cột tiêu chuẩn của bộ dữ liệu UCI Parkinsons.
 ID_COLUMN = "name"
@@ -155,8 +149,7 @@ def load_data(path: str | Path) -> pd.DataFrame:
 def build_subject_table(frame: pd.DataFrame) -> pd.DataFrame:
     """Tạo bảng đại diện duy nhất 1 dòng cho mỗi bệnh nhân (`subject_id`).
 
-    Dùng để thực hiện phân chia và kiểm tra Cross-Validation ở cấp độ bệnh nhân.
-    Hàm holdout cũ vẫn được giữ để tương thích test/experiment; production dùng nested CV.
+    Dùng để tạo các fold và kiểm tra Cross-Validation ở cấp độ bệnh nhân.
 
     Args:
         frame: DataFrame đầy đủ các bản ghi.
@@ -166,44 +159,4 @@ def build_subject_table(frame: pd.DataFrame) -> pd.DataFrame:
     """
     return frame.groupby(SUBJECT_COLUMN, as_index=False).agg(
         status=(TARGET_COLUMN, "first"), recordings=(ID_COLUMN, "size")
-    )
-
-
-def subject_holdout_split(
-    frame: pd.DataFrame, *, test_size: float = 0.25, random_state: int = 42
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Phân chia tập dữ liệu Train / Test độc lập theo từng bệnh nhân.
-
-    Đảm bảo 100% bệnh nhân ở tập Test hoàn toàn chưa từng xuất hiện trong tập Train,
-    ngăn ngừa triệt để rò rỉ dữ liệu giữa các bản ghi âm của cùng một người.
-
-    Args:
-        frame: DataFrame chứa toàn bộ bản ghi.
-        test_size: Tỷ lệ tập kiểm tra (mặc định 0.25).
-        random_state: Seed ngẫu nhiên để tái lập kết quả chia.
-
-    Returns:
-        tuple[pd.DataFrame, pd.DataFrame]: (train_frame, test_frame)
-
-    Raises:
-        AssertionError: Nếu có bất kỳ bệnh nhân nào xuất hiện ở cả 2 tập.
-    """
-    subjects = build_subject_table(frame)
-    train_subjects, test_subjects = train_test_split(
-        subjects,
-        test_size=test_size,
-        random_state=random_state,
-        stratify=subjects[TARGET_COLUMN],
-    )
-
-    train_ids = set(train_subjects[SUBJECT_COLUMN])
-    test_ids = set(test_subjects[SUBJECT_COLUMN])
-
-    # Kiểm tra bảo vệ chống rò rỉ tập dữ liệu
-    if not train_ids.isdisjoint(test_ids):
-        raise AssertionError("Phát hiện bệnh nhân xuất hiện ở cả tập huấn luyện và tập kiểm tra.")
-
-    return (
-        frame[frame[SUBJECT_COLUMN].isin(train_ids)].copy(),
-        frame[frame[SUBJECT_COLUMN].isin(test_ids)].copy(),
     )
