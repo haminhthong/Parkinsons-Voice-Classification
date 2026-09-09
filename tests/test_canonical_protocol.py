@@ -1,9 +1,14 @@
 import pytest
 
-from src.evaluate import make_subject_folds
-from src.features import MODEL_FEATURES, REDUNDANT_FEATURES, make_logistic_pipeline, make_pipeline
-from src.model_selection import nested_subject_cross_fitted
-from src.predict import load_bundle, predict_subject_records
+from parkinson_voice.evaluate import make_subject_folds
+from parkinson_voice.features import (
+    MODEL_FEATURES,
+    REDUNDANT_FEATURES,
+    make_logistic_pipeline,
+    make_pipeline,
+)
+from parkinson_voice.model_selection import nested_subject_cross_fitted
+from parkinson_voice.predict import load_bundle, predict_subject_records
 
 
 def test_production_pipeline_has_only_scaler_and_model():

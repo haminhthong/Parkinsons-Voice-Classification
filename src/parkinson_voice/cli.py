@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import argparse
 
-from src.audit import run_dataset_integrity_audit
-from src.train import train
+from parkinson_voice.audit import run_dataset_integrity_audit
+from parkinson_voice.train import train
 
 
 def audit() -> None:

@@ -13,12 +13,19 @@ import pandas as pd
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 
-from src.data import ID_COLUMN, ORIGINAL_FEATURES, SUBJECT_COLUMN, TARGET_COLUMN, load_data
-from src.features import MODEL_FEATURES
-from src.utils import sha256_file
+from parkinson_voice.data import (
+    ID_COLUMN,
+    ORIGINAL_FEATURES,
+    SUBJECT_COLUMN,
+    TARGET_COLUMN,
+    load_data,
+)
+from parkinson_voice.features import MODEL_FEATURES
+from parkinson_voice.utils import sha256_file
 
-DATA_PATH = Path(__file__).parents[1] / "data" / "parkinsons.csv"
-ARTIFACT_DIR = Path(__file__).parents[1] / "artifacts"
+PROJECT_ROOT = Path(__file__).parents[2]
+DATA_PATH = PROJECT_ROOT / "data" / "parkinsons.csv"
+ARTIFACT_DIR = PROJECT_ROOT / "artifacts"
 
 
 def _subject_class_distribution(frame: pd.DataFrame) -> dict[str, int]:

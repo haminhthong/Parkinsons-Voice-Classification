@@ -13,8 +13,8 @@ import pandas as pd
 import streamlit as st
 
 from app.settings import ARTIFACT_PATH, RESEARCH_WARNING
-from src.data import ORIGINAL_FEATURES
-from src.predict import load_bundle, predict_records
+from parkinson_voice.data import ORIGINAL_FEATURES
+from parkinson_voice.predict import load_bundle, predict_records
 
 # Cấu hình giao diện trang web Streamlit
 st.set_page_config(

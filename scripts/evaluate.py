@@ -7,9 +7,11 @@ import sys
 from pathlib import Path
 
 # Cho phép chạy trực tiếp ``python scripts/evaluate.py`` từ thư mục repo.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from src.train import train
+from parkinson_voice.train import train  # noqa: E402
 
 
 def main() -> None:

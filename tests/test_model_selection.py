@@ -2,9 +2,9 @@
 
 import numpy as np
 
-from src.evaluate import make_subject_folds
-from src.features import MODEL_FEATURES, make_logistic_pipeline
-from src.model_selection import search_logistic_configuration
+from parkinson_voice.evaluate import make_subject_folds
+from parkinson_voice.features import MODEL_FEATURES, make_logistic_pipeline
+from parkinson_voice.model_selection import search_logistic_configuration
 
 
 def test_logistic_search_returns_subject_level_candidates(frame):

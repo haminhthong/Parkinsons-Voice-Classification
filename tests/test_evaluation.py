@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.evaluate import (
+from parkinson_voice.evaluate import (
     aggregate_subject_predictions,
     bootstrap_subject_confidence_intervals,
     expected_calibration_error,

@@ -9,10 +9,12 @@ from pathlib import Path
 import pandas as pd
 
 # Cho phép chạy trực tiếp ``python scripts/predict.py`` từ thư mục repo.
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT))
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from app.settings import ARTIFACT_PATH
-from src.predict import load_bundle, predict_records
+from app.settings import ARTIFACT_PATH  # noqa: E402
+from parkinson_voice.predict import load_bundle, predict_records  # noqa: E402
 
 
 def main() -> None:

@@ -2,8 +2,8 @@ import joblib
 import numpy as np
 import sklearn
 
-from src.data import TARGET_COLUMN
-from src.predict import load_bundle, predict_records, predict_subject_records
+from parkinson_voice.data import TARGET_COLUMN
+from parkinson_voice.predict import load_bundle, predict_records, predict_subject_records
 
 
 def test_saved_model_can_reload_and_reproduce_predictions(frame, artifact_path):

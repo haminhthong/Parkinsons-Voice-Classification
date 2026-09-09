@@ -13,15 +13,15 @@ import numpy as np
 import pandas as pd
 from sklearn.base import clone
 
-from src.data import SUBJECT_COLUMN, TARGET_COLUMN
-from src.evaluate import (
+from parkinson_voice.data import SUBJECT_COLUMN, TARGET_COLUMN
+from parkinson_voice.evaluate import (
     aggregate_subject_predictions,
     calculate_metrics,
     make_subject_folds,
     select_decision_threshold,
 )
-from src.features import MODEL_FEATURES, make_logistic_pipeline
-from src.utils import positive_class_probability
+from parkinson_voice.features import MODEL_FEATURES, make_logistic_pipeline
+from parkinson_voice.utils import positive_class_probability
 
 
 def _oof_recording_scores(

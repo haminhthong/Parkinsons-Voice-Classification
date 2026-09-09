@@ -12,12 +12,13 @@ ROOT = Path.cwd()
 if not (ROOT / "src").is_dir():
     ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / "notebooks" / "02_colab_reproducible.ipynb"
+SOURCE_DIR = ROOT / "src" / "parkinson_voice"
 INCLUDED_FILES = [
     "configs/default.json",
     "data/parkinsons.csv",
     *[
         str(path.relative_to(ROOT)).replace("\\", "/")
-        for path in sorted((ROOT / "src").glob("*.py"))
+        for path in sorted(SOURCE_DIR.glob("*.py"))
     ],
 ]
 
@@ -88,7 +89,7 @@ print("Môi trường:", "Google Colab" if IN_COLAB else "Python cục bộ")
         md("""
 ## 2. Khôi phục dự án tối thiểu
 
-Notebook tự chứa dữ liệu, cấu hình và toàn bộ module `src` cần cho audit, train và
+Notebook tự chứa dữ liệu, cấu hình và toàn bộ package `parkinson_voice` cần cho audit, train và
 inference. Không phụ thuộc đường dẫn Windows, Google Drive hoặc GitHub.
 """),
         py(f"""
@@ -107,15 +108,15 @@ PROJECT_DIR.mkdir(parents=True)
 with zipfile.ZipFile(io.BytesIO(base64.b64decode(PAYLOAD))) as archive:
     archive.extractall(PROJECT_DIR)
 os.chdir(PROJECT_DIR)
-sys.path.insert(0, str(PROJECT_DIR))
+sys.path.insert(0, str(PROJECT_DIR / "src"))
 print("Thư mục chạy:", PROJECT_DIR)
 """),
         md("## 3. Kiểm tra phiên bản, checksum và schema"),
         py("""
 import json, joblib, numpy as np, pandas as pd, sklearn
-from src.data import ORIGINAL_FEATURES, SUBJECT_COLUMN, TARGET_COLUMN, load_data
-from src.features import MODEL_FEATURES, REDUNDANT_FEATURES
-from src.utils import sha256_file
+from parkinson_voice.data import ORIGINAL_FEATURES, SUBJECT_COLUMN, TARGET_COLUMN, load_data
+from parkinson_voice.features import MODEL_FEATURES, REDUNDANT_FEATURES
+from parkinson_voice.utils import sha256_file
 
 expected_versions = {
     "pandas": "2.2.3", "numpy": "2.1.3", "scikit-learn": "1.7.1",
@@ -140,8 +141,8 @@ display(frame.head(3))
 """),
         md("## 4. Audit phân chia theo subject"),
         py("""
-from src.audit import build_data_manifest
-from src.evaluate import make_subject_folds
+from parkinson_voice.audit import build_data_manifest
+from parkinson_voice.evaluate import make_subject_folds
 
 manifest = build_data_manifest(frame, DATA_PATH)
 assert manifest["duplicate_recording_names"] == 0
@@ -157,7 +158,7 @@ print("✅ Không có overlap subject trong outer CV")
 """),
         md("## 5. Huấn luyện canonical và sinh artifact"),
         py("""
-from src.train import train
+from parkinson_voice.train import train
 
 ARTIFACT_DIR = Path("artifacts")
 comparison = train(DATA_PATH, ARTIFACT_DIR)
@@ -165,7 +166,7 @@ display(comparison)
 """),
         md("## 6. Kiểm tra kết quả và artifact release"),
         py(f"""
-from src.predict import load_bundle
+from parkinson_voice.predict import load_bundle
 
 EXPECTED = json.loads({json.dumps(expected_metrics, ensure_ascii=False)})
 ACTUAL = json.loads((ARTIFACT_DIR / "metrics.json").read_text(encoding="utf-8"))
@@ -188,7 +189,7 @@ print(json.dumps(ACTUAL, ensure_ascii=False, indent=2))
 """),
         md("## 7. Suy luận dữ liệu mới — tùy chọn"),
         py("""
-from src.predict import load_bundle, predict_records
+from parkinson_voice.predict import load_bundle, predict_records
 
 inference_frame = frame.drop(columns=[TARGET_COLUMN, SUBJECT_COLUMN])
 record_results, subject_results = predict_records(inference_frame, bundle)

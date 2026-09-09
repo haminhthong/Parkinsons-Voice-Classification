@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from src.data import load_data
+from parkinson_voice.data import load_data
 
 
 @pytest.fixture(scope="session")

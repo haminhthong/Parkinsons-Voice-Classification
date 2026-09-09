@@ -24,7 +24,7 @@ from app.settings import (
     MAX_UPLOAD_BYTES,
     RESEARCH_WARNING,
 )
-from src.predict import load_bundle, predict_records, predict_subject_records
+from parkinson_voice.predict import load_bundle, predict_records, predict_subject_records
 
 logger = logging.getLogger(__name__)
 

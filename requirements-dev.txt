@@ -2,5 +2,4 @@
 -r requirements-ui.txt
 pytest>=7.4.0
 ruff>=0.1.0
-locust>=2.15.0
 pip-audit>=2.6.0

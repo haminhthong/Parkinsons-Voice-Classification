@@ -1,7 +1,7 @@
 """Kiểm thử nested cross-validation ở cấp subject."""
 
-from src.evaluate import make_subject_folds
-from src.model_selection import nested_subject_cross_fitted
+from parkinson_voice.evaluate import make_subject_folds
+from parkinson_voice.model_selection import nested_subject_cross_fitted
 
 
 def test_nested_cv_has_no_subject_overlap(frame):

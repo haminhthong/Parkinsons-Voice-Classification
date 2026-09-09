@@ -20,24 +20,28 @@ import joblib
 import pandas as pd
 import sklearn
 
-from src.audit import build_data_manifest
-from src.data import ORIGINAL_FEATURES, TARGET_COLUMN, load_data
-from src.evaluate import (
+from parkinson_voice.audit import build_data_manifest
+from parkinson_voice.data import ORIGINAL_FEATURES, TARGET_COLUMN, load_data
+from parkinson_voice.evaluate import (
     bootstrap_subject_confidence_intervals,
     calculate_metrics,
     expected_calibration_error,
     make_subject_folds,
 )
-from src.features import (
+from parkinson_voice.features import (
     MODEL_FEATURES,
     REDUNDANT_FEATURES,
     compute_feature_percentiles,
     make_logistic_pipeline,
 )
-from src.model_selection import nested_subject_cross_fitted, search_logistic_configuration
-from src.utils import sha256_file
+from parkinson_voice.model_selection import (
+    nested_subject_cross_fitted,
+    search_logistic_configuration,
+)
+from parkinson_voice.utils import sha256_file
 
-CONFIG_PATH = Path(__file__).parents[1] / "configs" / "default.json"
+PROJECT_ROOT = Path(__file__).parents[2]
+CONFIG_PATH = PROJECT_ROOT / "configs" / "default.json"
 DEFAULT_CONFIG = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
 RANDOM_STATE = int(DEFAULT_CONFIG["random_state"])
 AGGREGATION = str(DEFAULT_CONFIG["aggregation"])
@@ -137,7 +141,7 @@ def train(data_path: str | Path, artifact_dir: str | Path = "artifacts") -> pd.D
         "max": int(recordings_per_subject.max()),
     }
     data_sha256 = sha256_file(data_path)
-    git_commit = _git_commit(Path(__file__).parents[1])
+    git_commit = _git_commit(PROJECT_ROOT)
     final_oof_subjects = full_selection["subjects"].copy()
     final_oof_metrics = calculate_metrics(
         final_oof_subjects["status"],

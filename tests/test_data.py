@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.data import ORIGINAL_FEATURES, TARGET_COLUMN, validate_dataframe
+from parkinson_voice.data import ORIGINAL_FEATURES, TARGET_COLUMN, validate_dataframe
 
 
 def test_dataset_has_exactly_22_original_features(frame):

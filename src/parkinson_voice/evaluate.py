@@ -23,8 +23,8 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import StratifiedKFold
 
-from src.data import SUBJECT_COLUMN, TARGET_COLUMN, build_subject_table
-from src.utils import normalize_aggregation
+from parkinson_voice.data import SUBJECT_COLUMN, TARGET_COLUMN, build_subject_table
+from parkinson_voice.utils import normalize_aggregation
 
 
 def make_subject_folds(

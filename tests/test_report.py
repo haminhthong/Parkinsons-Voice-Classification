@@ -1,4 +1,4 @@
-from src.report import create_portfolio_figures
+from parkinson_voice.report import create_portfolio_figures
 
 
 def test_portfolio_figures_can_be_recreated(tmp_path):

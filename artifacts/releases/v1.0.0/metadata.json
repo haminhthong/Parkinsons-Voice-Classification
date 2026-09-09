@@ -19,6 +19,6 @@
     "class_weight": "balanced"
   },
   "sklearn_version": "1.7.1",
-  "git_commit": "86880b04de514b4f860c131f3f49c059a548ecdc",
+  "git_commit": "58eae8e53ed9a6b32fb27c3000a39de368ae3758",
   "scope": "research-only"
 }

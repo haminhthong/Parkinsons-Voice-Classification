@@ -1,5 +1,5 @@
-from src.audit import run_naive_split_audit
-from src.utils import sha256_file
+from parkinson_voice.audit import run_naive_split_audit
+from parkinson_voice.utils import sha256_file
 
 
 def test_data_checksum_is_stable(data_path):

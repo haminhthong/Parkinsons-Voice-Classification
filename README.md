@@ -26,7 +26,7 @@ Phạm vi được khóa ở một pipeline duy nhất:
 
 ### Luồng logic, luồng data và pipeline kỹ thuật duy nhất
 
-`configs/default.json` là nguồn cấu hình cho seed, số fold, grid Logistic, metric chính và 5.000 bootstrap replicates. `src/train.py`, artifact evaluation, release bundle, report và serving đều phải phản ánh cùng contract này.
+`configs/default.json` là nguồn cấu hình cho seed, số fold, grid Logistic, metric chính và 5.000 bootstrap replicates. `src/parkinson_voice/train.py`, artifact evaluation, release bundle, report và serving đều phải phản ánh cùng contract này.
 
 ```mermaid
 flowchart TD
@@ -58,11 +58,11 @@ Không có recording nào của cùng subject được xuất hiện ở hai ph�
 | Dữ liệu huấn luyện | `data/parkinsons.csv`, 195 dòng, 32 subject |
 | Cột định danh | `name`; `subject_id` được suy ra, không tin cậy mù giá trị client gửi lên |
 | Nhãn train | `status ∈ {0,1}`; bắt buộc nhất quán trong từng subject |
-| Feature nguồn | 22 cột acoustic số từ `src.data.ORIGINAL_FEATURES` |
+| Feature nguồn | 22 cột acoustic số từ `parkinson_voice.data.ORIGINAL_FEATURES` |
 | Feature bị bỏ | `Jitter:DDP`, `Shimmer:DDA` — redundant đại số, không phải chống leakage |
-| Feature model | 20 cột trong `src.features.MODEL_FEATURES`, thứ tự exact |
+| Feature model | 20 cột trong `parkinson_voice.features.MODEL_FEATURES`, thứ tự exact |
 | Model | `StandardScaler` + `LogisticRegression(penalty=l2, solver=liblinear)` |
-| Aggregation | `median`, bị khóa trong `src.utils.SUPPORTED_AGGREGATIONS` |
+| Aggregation | `median`, bị khóa trong `parkinson_voice.utils.SUPPORTED_AGGREGATIONS` |
 | Threshold | statistical threshold từ subject-level OOF, không phải clinical operating point |
 | Reliability | training-range P1–P99 và `INSUFFICIENT_RECORDINGS`; đây là cảnh báo plausibility |
 
@@ -87,7 +87,7 @@ Artifact release nằm tại `artifacts/releases/v1.0.0/` và gồm `model.jobli
 │   ├── parkinsons.csv
 │   └── README.md
 ├── notebooks/
-│   ├── 02_colab_reproducible.ipynb # notebook tự chứa, chạy đúng code/src/data
+│   ├── 02_colab_reproducible.ipynb # notebook tự chứa, chạy đúng package/src và data
 │   ├── build_colab_notebook.py
 │   └── validate_colab_notebook.py
 ├── reports/figures/                # bốn hình canonical sinh từ evaluation artifacts
@@ -96,14 +96,16 @@ Artifact release nằm tại `artifacts/releases/v1.0.0/` và gồm `model.jobli
 │   ├── evaluate.py                  # train/evaluate canonical pipeline
 │   └── predict.py                   # batch inference bằng release artifact
 ├── src/
-│   ├── data.py                      # load, validate schema, subject identity
-│   ├── audit.py                     # manifest và audit leakage minh họa
-│   ├── features.py                  # fixed 20-feature contract + Logistic pipeline
-│   ├── evaluate.py                  # subject folds, metrics, aggregation, threshold, bootstrap
-│   ├── model_selection.py           # inner search và nested subject CV
-│   ├── predict.py                   # load bundle, range warning, subject inference
-│   ├── train.py                     # canonical training entrypoint
-│   └── report.py                    # 4 biểu đồ từ evaluation artifacts
+│   └── parkinson_voice/             # package source duy nhất của pipeline
+│       ├── data.py                  # load, validate schema, subject identity
+│       ├── audit.py                 # manifest và audit leakage minh họa
+│       ├── features.py              # fixed 20-feature contract + Logistic pipeline
+│       ├── evaluate.py              # subject folds, metrics, aggregation, threshold, bootstrap
+│       ├── model_selection.py       # inner search và nested subject CV
+│       ├── predict.py               # load bundle, range warning, subject inference
+│       ├── train.py                 # canonical training entrypoint
+│       ├── report.py                # 4 biểu đồ từ evaluation artifacts
+│       └── cli.py                   # entrypoints parkinson-audit/evaluate
 ├── tests/                           # unit, integration và regression invariants
 ├── Dockerfile
 ├── pyproject.toml
@@ -128,6 +130,7 @@ Windows:
 ```powershell
 .venv\Scripts\Activate.ps1
 python -m pip install -r requirements-dev.txt
+python -m pip install -e .
 ```
 
 Linux/macOS:
@@ -135,6 +138,7 @@ Linux/macOS:
 ```bash
 source .venv/bin/activate
 python -m pip install -r requirements-dev.txt
+python -m pip install -e .
 ```
 
 ### 2. Audit dữ liệu
@@ -143,13 +147,13 @@ python -m pip install -r requirements-dev.txt
 python scripts/audit_data.py --data data/parkinsons.csv --artifacts artifacts
 ```
 
-Audit kiểm tra schema, kiểu số, NaN/Inf, nhãn, label consistency theo subject, duplicate name/vector, phân bố subject và SHA-256. Bản audit leakage record-level trong `src/audit.py` chỉ là bằng chứng minh họa rủi ro, không tham gia model selection hay metric production.
+Audit kiểm tra schema, kiểu số, NaN/Inf, nhãn, label consistency theo subject, duplicate name/vector, phân bố subject và SHA-256. Bản audit leakage record-level trong `src/parkinson_voice/audit.py` chỉ là bằng chứng minh họa rủi ro, không tham gia model selection hay metric production.
 
 ### 3. Train và tạo artifact
 
 ```bash
-python -m src.train --data data/parkinsons.csv --artifacts artifacts
-python -m src.report --artifacts artifacts --output reports/figures
+python -m parkinson_voice.train --data data/parkinsons.csv --artifacts artifacts
+python -m parkinson_voice.report --artifacts artifacts --output reports/figures
 python tools/update_readme_results.py
 ```
 
@@ -265,9 +269,9 @@ Các con số trên được đồng bộ bằng `python tools/update_readme_res
 
 ## Báo cáo và tái lập
 
-`src/report.py` tạo bốn hình từ artifact canonical: `inner_logistic_selection.png`, `cross_fitted_subject_scores.png`, `fixed_feature_contract.png` và `threshold_search.png`. Report chỉ đọc các artifact trong evaluation contract và không tự chọn model khác.
+`src/parkinson_voice/report.py` tạo bốn hình từ artifact canonical: `inner_logistic_selection.png`, `cross_fitted_subject_scores.png`, `fixed_feature_contract.png` và `threshold_search.png`. Report chỉ đọc các artifact trong evaluation contract và không tự chọn model khác.
 
-Notebook `02_colab_reproducible.ipynb` nhúng data/config/src, chạy audit, nested CV, release fit và inference. `validate_colab_notebook.py` thực thi tuần tự mọi code cell; CI rebuild notebook rồi kiểm tra `git diff` để phát hiện snapshot lệch code.
+Notebook `02_colab_reproducible.ipynb` nhúng data/config/package `src/parkinson_voice`, chạy audit, nested CV, release fit và inference. `validate_colab_notebook.py` thực thi tuần tự mọi code cell; CI rebuild notebook rồi kiểm tra `git diff` để phát hiện snapshot lệch code.
 
 ## CI
 

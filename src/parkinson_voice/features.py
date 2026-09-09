@@ -13,7 +13,7 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-from src.data import ORIGINAL_FEATURES
+from parkinson_voice.data import ORIGINAL_FEATURES
 
 REDUNDANT_FEATURES = ["Jitter:DDP", "Shimmer:DDA"]
 

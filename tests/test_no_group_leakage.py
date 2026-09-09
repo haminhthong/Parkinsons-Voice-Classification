@@ -1,7 +1,7 @@
 """Kiểm thử bất biến không rò rỉ subject trong mọi fold."""
 
-from src.data import SUBJECT_COLUMN
-from src.evaluate import make_subject_folds
+from parkinson_voice.data import SUBJECT_COLUMN
+from parkinson_voice.evaluate import make_subject_folds
 
 
 def test_every_validation_fold_has_both_classes_and_no_overlap(frame):

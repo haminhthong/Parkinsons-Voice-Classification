@@ -3,9 +3,13 @@
 .pytest_cache
 .ruff_cache
 .mplconfig
-__pycache__
 *.pyc
+**/__pycache__
+*.egg-info
+pytest-tmp*
+parkinsons-colab-runtime
+reports/.pytest-cache
+reports/.pytest-tmp
 notebooks
 reports/figures
 tests
-

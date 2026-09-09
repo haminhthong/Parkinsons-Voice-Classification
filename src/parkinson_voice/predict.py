@@ -13,9 +13,9 @@ import numpy as np
 import pandas as pd
 import sklearn
 
-from src.data import ID_COLUMN, SUBJECT_COLUMN, validate_dataframe
-from src.features import MODEL_FEATURES, ORIGINAL_FEATURES
-from src.utils import positive_class_probability
+from parkinson_voice.data import ID_COLUMN, SUBJECT_COLUMN, validate_dataframe
+from parkinson_voice.features import MODEL_FEATURES, ORIGINAL_FEATURES
+from parkinson_voice.utils import positive_class_probability
 
 DANGEROUS_CSV_PREFIXES = ("=", "+", "-", "@")
 
