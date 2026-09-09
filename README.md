@@ -175,6 +175,13 @@ streamlit run app/streamlit_app.py
 
 API docs ở `http://localhost:8000/docs`; Streamlit ở `http://localhost:8501`. API tự nạp `artifacts/releases/v1.0.0/model.joblib`.
 
+Batch inference không tạo file phụ nếu không yêu cầu; thêm `--record-output` khi cần lưu score từng recording:
+
+```bash
+python scripts/predict.py tests/fixtures/inference_valid.csv \
+  --record-output reports/prediction_record_scores.csv
+```
+
 ### 6. Docker
 
 ```bash

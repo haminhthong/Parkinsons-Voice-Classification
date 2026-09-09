@@ -65,7 +65,7 @@ app = FastAPI(
         "Lưu ý: Chỉ nhận bảng 20 hoặc 22 đặc trưng âm học đã trích xuất sẵn (CSV/JSON), "
         "KHÔNG nhận file âm thanh thô WAV/MP3. Không dùng cho mục đích chẩn đoán y tế."
     ),
-    version="1.2.0",
+    version="1.0.0",
     lifespan=lifespan,
 )
 
