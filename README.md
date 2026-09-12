@@ -111,7 +111,6 @@ parkinsons-voice-classification/
 ├── README.md                           # Tài liệu tổng quan nghiên cứu
 ├── MODEL_CARD.md                       # Model card chi tiết
 ├── pyproject.toml                      # Cấu hình dự án & dependencies
-├── Dockerfile                          # Multi-stage Docker build
 │
 ├── data/
 │   ├── parkinsons.csv                  # UCI Parkinsons dataset (195 rows, 32 subjects)
@@ -158,7 +157,7 @@ parkinsons-voice-classification/
 │   └── test_api.py
 │
 └── .github/workflows/
-    └── ci.yml                          # GitHub Actions CI (Ruff, Pytest, Docker smoke test)
+    └── ci.yml                          # GitHub Actions CI (Ruff, Pytest)
 ```
 
 ---
@@ -211,11 +210,6 @@ uvicorn app.api:app --reload --port 8000
 streamlit run app/streamlit_app.py
 ```
 Giao diện trực quan cho phép tải lên bảng đặc trưng âm học, xem điểm sàng lọc từng bản ghi, điểm median của bệnh nhân và biểu đồ đặc trưng.
-
-### 5. Chạy bằng Docker
-```bash
-docker build --target api -t parkinson-api .
-docker run --rm -p 8000:8000 parkinson-api
 ```
 
 ---

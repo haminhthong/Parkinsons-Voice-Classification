@@ -37,27 +37,3 @@ jobs:
       - name: Run Pytest
         run: pytest -q
 
-  docker:
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build API image
-        run: docker build --target api -t parkinson-api .
-
-      - name: Start API container
-        run: docker run -d --name parkinson-api -p 8000:8000 parkinson-api
-
-      - name: Wait for API healthcheck
-        run: |
-          for i in {1..30}; do
-            curl --fail --silent http://localhost:8000/health && exit 0
-            sleep 2
-          done
-          docker logs parkinson-api
-          exit 1
-
-      - name: Cleanup container
-        if: always()
-        run: docker rm -f parkinson-api || true

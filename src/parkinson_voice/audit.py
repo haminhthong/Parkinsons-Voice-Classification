@@ -132,6 +132,22 @@ def run_naive_split_audit(
     return audit_metrics
 
 
+def main() -> None:
+    """Điểm vào CLI chạy dataset integrity audit và naive split audit."""
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Audit dataset Parkinsons và đối chứng rò rỉ.")
+    parser.add_argument("--data", default=str(DATA_PATH), help="Đường dẫn tệp CSV.")
+    parser.add_argument("--artifacts", default=str(ARTIFACT_DIR), help="Thư mục xuất artifact.")
+    args = parser.parse_args()
+
+    manifest = run_dataset_integrity_audit(args.data, args.artifacts)
+    naive = run_naive_split_audit(args.data, args.artifacts)
+    print("=== DATA MANIFEST ===")
+    print(json.dumps(manifest, ensure_ascii=False, indent=2))
+    print("\n=== NAIVE SPLIT AUDIT ===")
+    print(json.dumps(naive, ensure_ascii=False, indent=2))
+
+
 if __name__ == "__main__":
-    metrics = run_naive_split_audit()
-    print(json.dumps(metrics, indent=2))
+    main()

@@ -140,28 +140,25 @@ def calculate_metrics(y_true, y_pred, y_score) -> dict[str, float]:
     return metrics
 
 
-def calculate_clinical_likelihood_ratios(
-    sensitivity: float,
-    specificity: float,
-) -> dict[str, float | None]:
-    """Tính toán tỷ số khả dĩ dương và âm (Likelihood Ratios: LR+, LR-) cho phân tích khám phá.
-
-    LR+ = Sensitivity / (1 - Specificity)
-    LR- = (1 - Sensitivity) / Specificity
-
-    Lưu ý: Chỉ dùng cho mục đích báo cáo khám phá trong nghiên cứu sàng lọc,
-    không dùng để suy diễn chẩn đoán lâm sàng độc lập.
-
-    Args:
-        sensitivity: Độ nhạy (Recall/Sensitivity) trong khoảng [0, 1].
-        specificity: Độ đặc hiệu (Specificity) trong khoảng [0, 1].
-
-    Returns:
-        dict[str, float | None]: Tỷ số khả dĩ LR+ và LR- (hoặc None nếu chia cho 0).
-    """
-    lr_pos = (sensitivity / (1.0 - specificity)) if specificity < 1.0 else None
-    lr_neg = ((1.0 - sensitivity) / specificity) if specificity > 0.0 else None
-    return {"LR+": lr_pos, "LR-": lr_neg}
+def _confusion_metrics(tn: int, fp: int, fn: int, tp: int) -> dict[str, float]:
+    """Tính các chỉ số phân loại cơ bản từ 4 phần tử ma trận nhầm lẫn."""
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    specificity = tn / (tn + fp) if (tn + fp) else 0.0
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    npv = tn / (tn + fn) if (tn + fn) else 0.0
+    f1_positive = 2 * tp / (2 * tp + fp + fn) if (2 * tp + fp + fn) else 0.0
+    f1_negative = 2 * tn / (2 * tn + fp + fn) if (2 * tn + fp + fn) else 0.0
+    total = tn + fp + fn + tp
+    accuracy = (tp + tn) / total if total else 0.0
+    return {
+        "Accuracy": accuracy,
+        "Balanced Accuracy": (recall + specificity) / 2.0,
+        "Precision": precision,
+        "Recall/Sensitivity": recall,
+        "Specificity": specificity,
+        "NPV": npv,
+        "F1-macro": (f1_positive + f1_negative) / 2.0,
+    }
 
 
 def aggregate_subject_predictions(
@@ -248,22 +245,11 @@ def select_decision_threshold(
         fp = int(np.count_nonzero((y_true == 0) & (prediction == 1)))
         fn = int(np.count_nonzero((y_true == 1) & (prediction == 0)))
         tp = int(np.count_nonzero((y_true == 1) & (prediction == 1)))
-        recall = tp / (tp + fn) if tp + fn else 0.0
-        specificity = tn / (tn + fp) if tn + fp else 0.0
-        precision = tp / (tp + fp) if tp + fp else 0.0
-        npv = tn / (tn + fn) if tn + fn else 0.0
-        f1_positive = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0.0
-        f1_negative = 2 * tn / (2 * tn + fp + fn) if 2 * tn + fp + fn else 0.0
+        metrics = _confusion_metrics(tn, fp, fn, tp)
         rows.append(
             {
                 "Threshold": float(threshold),
-                "Accuracy": float(np.mean(y_true == prediction)),
-                "Balanced Accuracy": (recall + specificity) / 2,
-                "Precision": precision,
-                "Recall/Sensitivity": recall,
-                "Specificity": specificity,
-                "NPV": npv,
-                "F1-macro": (f1_positive + f1_negative) / 2,
+                **metrics,
                 "ROC-AUC": score_metrics["ROC-AUC"],
                 "Brier score": score_metrics["Brier score"],
             }
@@ -351,13 +337,8 @@ def bootstrap_subject_confidence_intervals(
         fp = int(np.count_nonzero((sampled_true == 0) & (sampled_pred == 1)))
         fn = int(np.count_nonzero((sampled_true == 1) & (sampled_pred == 0)))
         tp = int(np.count_nonzero((sampled_true == 1) & (sampled_pred == 1)))
+        metrics = _confusion_metrics(tn, fp, fn, tp)
 
-        recall = tp / (tp + fn) if tp + fn else 0.0
-        specificity = tn / (tn + fp) if tn + fp else 0.0
-        precision = tp / (tp + fp) if tp + fp else 0.0
-        npv = tn / (tn + fn) if tn + fn else 0.0
-        f1_positive = 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else 0.0
-        f1_negative = 2 * tn / (2 * tn + fp + fn) if 2 * tn + fp + fn else 0.0
         positive_scores = sampled_score[sampled_true == 1]
         negative_scores = sampled_score[sampled_true == 0]
         score_comparison = positive_scores[:, None] - negative_scores[None, :]
@@ -367,13 +348,7 @@ def bootstrap_subject_confidence_intervals(
         )
         samples.append(
             {
-                "Accuracy": float(np.mean(sampled_true == sampled_pred)),
-                "Balanced Accuracy": (recall + specificity) / 2,
-                "Precision": precision,
-                "Recall/Sensitivity": recall,
-                "Specificity": specificity,
-                "NPV": npv,
-                "F1-macro": (f1_positive + f1_negative) / 2,
+                **metrics,
                 "ROC-AUC": roc_auc,
                 "Brier score": float(np.mean((sampled_true - sampled_score) ** 2)),
             }
