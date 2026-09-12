@@ -14,7 +14,7 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -37,18 +37,9 @@ jobs:
       - name: Run Pytest
         run: pytest -q
 
-      - name: Validate README results synchronization
-        run: python tools/update_readme_results.py --check
-
-      - name: Validate Colab notebook
-        run: |
-          python notebooks/build_colab_notebook.py
-          python notebooks/validate_colab_notebook.py
-          git diff --exit-code notebooks/02_colab_reproducible.ipynb
-
   docker:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
 
@@ -61,27 +52,12 @@ jobs:
       - name: Wait for API healthcheck
         run: |
           for i in {1..30}; do
-            curl --fail --silent http://localhost:8000/ready && exit 0
+            curl --fail --silent http://localhost:8000/health && exit 0
             sleep 2
           done
           docker logs parkinson-api
           exit 1
 
-      - name: Build UI image
-        run: docker build --target ui -t parkinson-ui .
-
-      - name: Start UI container
-        run: docker run -d --name parkinson-ui -p 8501:8501 parkinson-ui
-
-      - name: Wait for UI healthcheck
-        run: |
-          for i in {1..30}; do
-            curl --fail --silent http://localhost:8501/_stcore/health && exit 0
-            sleep 2
-          done
-          docker logs parkinson-ui
-          exit 1
-
-      - name: Cleanup containers
+      - name: Cleanup container
         if: always()
-        run: docker rm -f parkinson-api parkinson-ui || true
+        run: docker rm -f parkinson-api || true

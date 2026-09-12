@@ -3,7 +3,7 @@
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-ARTIFACT_PATH = PROJECT_ROOT / "artifacts" / "releases" / "v1.0.0" / "model.joblib"
+ARTIFACT_PATH = PROJECT_ROOT / "artifacts" / "model.joblib"
 RESEARCH_WARNING = (
     "Chỉ phục vụ nghiên cứu và học tập, không dùng để chẩn đoán hoặc thay thế tư vấn y khoa."
 )

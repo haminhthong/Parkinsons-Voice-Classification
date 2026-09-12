@@ -3,7 +3,7 @@
   "outer_folds": 4,
   "inner_folds": 3,
   "aggregation": "median",
-  "bootstrap_replicates": 5000,
+  "bootstrap_replicates": 1000,
   "model": {
     "type": "logistic_regression",
     "penalty": "l2",

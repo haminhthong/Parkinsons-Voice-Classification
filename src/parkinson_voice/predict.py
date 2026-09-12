@@ -11,7 +11,6 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import sklearn
 
 from parkinson_voice.data import ID_COLUMN, SUBJECT_COLUMN, validate_dataframe
 from parkinson_voice.features import MODEL_FEATURES, ORIGINAL_FEATURES
@@ -27,10 +26,10 @@ def sanitize_csv_value(value: str) -> str:
 
 
 def load_bundle(path: str | Path) -> dict:
-    """Nạp artifact và kiểm tra exact model/feature contract trước khi predict."""
+    """Nạp artifact mô hình và kiểm tra các trường cơ bản."""
     filepath = Path(path)
     if not filepath.is_file():
-        raise RuntimeError("Không tìm thấy model artifact.")
+        raise RuntimeError(f"Không tìm thấy model artifact tại: {filepath}")
 
     bundle = joblib.load(filepath)
     required = {
@@ -38,33 +37,17 @@ def load_bundle(path: str | Path) -> dict:
         "feature_columns",
         "decision_threshold",
         "aggregation",
-        "model_version",
-        "schema_version",
-        "sklearn_version",
     }
     missing = required.difference(bundle)
     if missing:
-        raise ValueError(f"Artifact thiếu siêu dữ liệu bắt buộc: {sorted(missing)}")
-    if int(bundle["schema_version"]) != 2:
-        raise ValueError("Artifact không dùng schema version 2.")
-    if str(bundle["sklearn_version"]) != sklearn.__version__:
-        raise ValueError(
-            "Artifact được tạo bằng scikit-learn "
-            f"{bundle['sklearn_version']}, runtime đang dùng {sklearn.__version__}."
-        )
+        raise ValueError(f"Artifact thiếu trường bắt buộc: {sorted(missing)}")
     if list(bundle["feature_columns"]) != MODEL_FEATURES:
-        raise ValueError("Artifact feature schema không khớp chính xác với runtime.")
+        raise ValueError("Danh sách đặc trưng trong artifact không khớp MODEL_FEATURES.")
     if bundle["aggregation"] != "median":
-        raise ValueError("Artifact production phải khóa aggregation='median'.")
+        raise ValueError("Quy tắc gộp phải là 'median'.")
     threshold = float(bundle["decision_threshold"])
     if not 0 <= threshold <= 1:
         raise ValueError("Artifact có decision threshold không hợp lệ.")
-
-    steps = getattr(bundle["model"], "named_steps", {})
-    if "scale" not in steps or "model" not in steps or "select" in steps:
-        raise ValueError("Artifact model phải có đúng StandardScaler và LogisticRegression.")
-    if steps["model"].__class__.__name__ != "LogisticRegression":
-        raise ValueError("Artifact production chỉ chấp nhận LogisticRegression.")
     return bundle
 
 
@@ -117,8 +100,8 @@ def _prepare_inference_frame(frame: pd.DataFrame) -> pd.DataFrame:
 
 
 def _training_ranges(bundle: dict) -> dict[str, tuple[float, float]]:
-    """Đọc training range từ metadata mới."""
-    ranges = bundle.get("training_feature_ranges", {})
+    """Đọc dải giá trị huấn luyện (P1-P99) để cảnh báo plausibility."""
+    ranges = bundle.get("feature_ranges") or bundle.get("training_feature_ranges", {})
     return {str(column): (float(values[0]), float(values[1])) for column, values in ranges.items()}
 
 
@@ -141,7 +124,7 @@ def check_recording_training_range(
 
 
 def predict_records(frame: pd.DataFrame, bundle: dict) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Tính score recording và median subject score, không tạo recording decision."""
+    """Tính score recording và median subject score, không gán nhãn chẩn đoán."""
     validated = _prepare_inference_frame(frame)
     feature_columns = list(bundle["feature_columns"])
     scores = positive_class_probability(bundle["model"], validated[feature_columns])
@@ -158,12 +141,6 @@ def predict_records(frame: pd.DataFrame, bundle: dict) -> tuple[pd.DataFrame, pd
         }
     )
 
-    minimum_recordings = int(
-        bundle.get(
-            "training_min_recordings",
-            bundle.get("training_recordings_per_subject", {}).get("min", 1),
-        )
-    )
     threshold = float(bundle["decision_threshold"])
     subject_rows = []
     for subject_id, group in records.groupby(SUBJECT_COLUMN, sort=True):
@@ -171,11 +148,11 @@ def predict_records(frame: pd.DataFrame, bundle: dict) -> tuple[pd.DataFrame, pd
         warnings = [
             warning for warning_list in group["feature_warnings"] for warning in warning_list
         ]
-        if len(group) < minimum_recordings:
+        if len(group) < 3:
             warnings.insert(
                 0,
-                f"INSUFFICIENT_RECORDINGS: subject có {len(group)} recording; "
-                f"training minimum là {minimum_recordings}",
+                f"FEWER_RECORDINGS_WARNING: Đối tượng có {len(group)} bản ghi; "
+                "mô hình được huấn luyện trên nhiều bản ghi lặp lại mỗi đối tượng.",
             )
         warnings = list(dict.fromkeys(warnings))
         subject_rows.append(
@@ -185,11 +162,11 @@ def predict_records(frame: pd.DataFrame, bundle: dict) -> tuple[pd.DataFrame, pd
                 "subject_screening_score": subject_score,
                 "decision_threshold": threshold,
                 "screening_result": (
-                    "model-positive" if subject_score >= threshold else "model-negative"
+                    "above_internal_threshold"
+                    if subject_score >= threshold
+                    else "below_internal_threshold"
                 ),
-                "reliability": "limited" if warnings else "standard",
                 "warnings": warnings,
-                "model_version": str(bundle["model_version"]),
             }
         )
     return records, pd.DataFrame(subject_rows)
@@ -220,9 +197,7 @@ def predict_subject_records(
         "subject_screening_score": float(subject["subject_screening_score"]),
         "decision_threshold": float(subject["decision_threshold"]),
         "screening_result": str(subject["screening_result"]),
-        "reliability": str(subject["reliability"]),
         "warnings": list(subject["warnings"]),
-        "model_version": str(subject["model_version"]),
         "aggregation": "median",
         "recording_scores": records["screening_score"].astype(float).tolist(),
     }

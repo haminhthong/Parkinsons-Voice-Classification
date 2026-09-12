@@ -1,101 +1,76 @@
-# 📋 Model Card: Parkinson’s Voice Feature Screening Prototype
+# 📋 Model Card: Parkinson’s Voice Feature Screening (Subject-Level)
 
-## 1. Model Overview & Positioning
+## 1. Model Overview
 
-- **Model Name:** Parkinson’s Voice Feature Screening Pipeline (Leakage-Aware Prototype)
-- **Version:** `1.0.0`
-- **Model Architecture:** `StandardScaler` $\to$ L2 `LogisticRegression` with fixed Subject-Level `median` Aggregation.
-- **Input Scope:** 20 model features derived from 22 pre-extracted tabular acoustic voice features from sustained phonation `/a/` (UCI Parkinsons).
-- **Audio Limitation:** **The model does NOT process raw audio files (WAV, MP3, FLAC).** It operates strictly as a tabular acoustic feature screening model.
-
----
-
-## 2. Intended Use & Clinical Boundaries
-
-### ✅ Intended Uses:
-- **Academic & Portfolio Research:** Demonstrating leakage-aware validation, patient-level stratification, nested CV and subject bootstrap uncertainty on grouped biomedical tabular data.
-- **Experimental Screening Signal:** Generating recording `screening_score` values and a subject-level `model-positive` or `model-negative` result under explicit research caveats.
-
-### ❌ Non-Intended Uses:
-- **NOT a Medical Diagnostic System:** The model cannot diagnose Parkinson’s Disease or replace neurological examination, dopamine transporter imaging (DaTscan), or clinical motor scoring (MDS-UPDRS).
-- **NOT an End-to-End Voice Diagnosis Tool:** It does not extract features from raw microphone recordings or perform acoustic signal processing.
-- **NOT Validated for Clinical Deployment:** The prototype has not undergone clinical trial validation, multi-site external validation, or regulatory clearance (e.g., FDA 510(k), CE-MDR).
+- **Model Name:** Parkinson’s Voice Feature Screening Pipeline
+- **Model Type:** `StandardScaler` $\to$ L2 regularized `LogisticRegression` (`C=0.01`, `class_weight='balanced'`)
+- **Aggregation:** Subject-level `median` score aggregation across repeated recordings
+- **Input Scope:** 20 precomputed acoustic voice features from sustained phonation `/a/` (UCI Parkinsons dataset)
+- **Audio Limitation:** **The model does NOT process raw audio files (WAV, MP3, FLAC).** It operates strictly on tabular acoustic measurements.
 
 ---
 
-## 3. Training & Evaluation Data
+## 2. Intended Use & Boundaries
 
-- **Dataset Source:** [UCI Machine Learning Repository: Parkinsons Telemonitoring / Voice Dataset](https://archive.ics.uci.edu/dataset/174/parkinsons).
-- **Cohort Size:** 195 acoustic recordings from **32 distinct subjects** (24 subjects with `status=1`, 8 with `status=0`). Each subject provided 6–7 sustained vowel phonations.
-- **Data Partitioning (Zero-Leakage Invariant):**
-- **Evaluation Cohort:** All 32 subjects are used by nested 4-fold outer CV; each subject is outer-test exactly once.
-- **Inner Selection:** Three subject-level inner folds tune only `C` and `class_weight`.
-- **Constraint:** A subject never crosses train/validation boundaries inside an outer or inner fold.
+### ✅ Intended Use:
+- **Academic & Portfolio Research:** Demonstrating leakage-aware evaluation, subject-level stratification, nested cross-validation, and bootstrap uncertainty estimation on grouped biomedical tabular data.
+- **Methodological Benchmark:** Illustrating the difference between naive row-level splits and subject-level evaluation.
 
----
-
-## 4. Canonical 8-Stage Architecture
-
-```
-1. DATA INGESTION
-   UCI Parkinsons Tabular Acoustic Features (195 recordings / 32 subjects)
-          ↓
-2. SUBJECT IDENTITY & SCHEMA AUDIT
-   Schema validation, subject_id extraction, remove algebraic redundancies (Jitter:DDP, Shimmer:DDA)
-          ↓
-3. NESTED PATIENT-LEVEL CROSS-VALIDATION
-   4 Outer Folds × 3 Inner Folds (32 Subjects, Zero Leakage)
-          ↓
-4. MODEL DEVELOPMENT INSIDE OUTER TRAIN
-   Subject-Stratified Inner Folds → StandardScaler → Logistic Regression
-          ↓
-5. FIXED MODEL CONFIGURATION
-   Only C and class_weight are selected; production architecture stays logistic
-          ↓
-6. SCORE & DECISION LAYER
-   Recording scores → median per subject → threshold from outer-train OOF
-          ↓
-7. CROSSFITTED EVALUATION
-   32 Cross-Fitted Subject Predictions → Metrics + Subject Bootstrap 95% CI (5,000x)
-          ↓
-8. SERVING & RELIABILITY LAYER
-   FastAPI & Streamlit → training-range warning → INSUFFICIENT_RECORDINGS
-```
+### ❌ Out-of-Scope / Non-Intended Uses:
+- **NOT a Clinical Diagnostic Device:** Cannot diagnose Parkinson’s Disease or replace neurological examination, DaTscan, or clinical motor scoring (MDS-UPDRS).
+- **NOT an Audio Processing Tool:** Does not extract features from microphone signals.
+- **NOT Validated for Clinical Practice:** No clinical trial validation or regulatory clearance (e.g., FDA 510(k), CE-MDR).
 
 ---
 
-## 5. Performance Metrics & Statistical Uncertainty
+## 3. Dataset & Preprocessing
 
-### ⚠️ Critical Sample Size Caveat
-The dataset contains only **32 subjects (24 positive, 8 control)**. Cross-fitted
-metrics and bootstrap intervals are internal research estimates with high
-variance, not clinical validation. There is no external patient cohort.
-
-### Performance Summary Table
-
-| Evaluation Layer | Cohort | F1-Macro | Balanced Accuracy | Sensitivity | Specificity | ROC-AUC | Brier Score |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Nested Subject CV** | 32 subjects (4 Outer × 3 Inner) | generated in `artifacts/metrics.json` | generated | generated | generated | generated | generated |
-| **Subject Bootstrap 95% CI** | 32 cross-fitted subjects (5,000 replicates) | see `artifacts/evaluation/bootstrap_ci.csv` | see artifact | see artifact | see artifact | see artifact | see artifact |
+- **Dataset Source:** [UCI Machine Learning Repository: Parkinsons Dataset](https://archive.ics.uci.edu/dataset/174/parkinsons)
+- **Cohort Size:** 195 sustained vowel recordings across **32 unique subjects** (24 positive, 8 healthy controls).
+- **Grouping:** Each subject has multiple recordings (typically 6 per person). All recordings of the same subject share the same label.
+- **Feature Selection:** 22 original acoustic features $\to$ 20 features used. `Jitter:DDP` and `Shimmer:DDA` are excluded because they are deterministic algebraic multiples of `MDVP:RAP` ($3\times$) and `Shimmer:APQ3` ($3\times$), not due to statistical feature selection.
 
 ---
 
-## 6. Serving Guardrails & Training-Range Policy
+## 4. Evaluation Protocol
 
-To prevent silent failures and deceptive predictions during inference, the serving runtime incorporates three automated guardrails:
-
-1. **P1–P99 Feature Range Checks:**
-   During training, the 1st and 99th percentiles ($P_1, P_{99}$) of all 20 modeling features are recorded. If any input feature falls outside $[P_1, P_{99}]$, the system emits a `FEATURE_OUTSIDE_TRAINING_RANGE` warning and marks subject reliability as `"limited"`. This is a plausibility warning, not an OOD detector.
-2. **Minimum Recordings Policy:**
-   The minimum is read from the training distribution and stored in the artifact. When fewer recordings are supplied, the system issues `INSUFFICIENT_RECORDINGS` and classifies reliability as `"limited"`.
-3. **Training Label Rejection:**
-   The canonical inference API (`POST /v1/screen/subject`) rejects payloads containing the training target `status` with a `422 Unprocessable Entity` status.
+- **Protocol:** Nested Stratified Subject-Level Cross-Validation (4 outer folds $\times$ 3 inner folds).
+- **Zero-Leakage Invariant:** All recordings from any single subject belong strictly to train or test within each fold; subject sets between fit and test are strictly disjoint.
+- **Inner Folds:** Tune regularization parameter $C \in [0.01, 0.1, 1, 10, 100]$, `class_weight \in [None, "balanced"]`, and internal research decision threshold on inner out-of-fold predictions.
+- **Outer Folds:** Evaluate generalization performance on completely held-out subjects.
+- **Subject Aggregation:** Individual recording probabilities are aggregated by subject using **median**, minimizing sensitivity to noisy outlier recordings.
+- **Uncertainty Estimation:** 95% Confidence Intervals computed via subject-level cluster bootstrap.
 
 ---
 
-## 7. Limitations & Technical Debt
+## 5. Performance Summary
 
-1. **Severe Sample Size Limitations:** 32 subjects total (only 8 healthy controls in the entire dataset). Small validation folds are prone to high metric variance.
-2. **Lack of Demographic Covariates:** The UCI dataset omits age, biological sex, recording hardware, and clinical site metadata. Subgroup fairness and demographic parity cannot be audited.
-3. **Absence of External Cohort Validation:** The pipeline has not been tested against external speech datasets (e.g., PC-GITA, mPower) due to acoustic schema differences.
-4. **Artifact Serialization Security:** Current deployment bundles use `joblib`. While standard for local portfolios, enterprise deployments should migrate to hardened formats like `skops` or `ONNX` to eliminate arbitrary code execution vulnerabilities.
+> **Statistical Uncertainty Caveat:** With only 32 subjects (24 PD vs 8 controls), performance estimates exhibit wide variance. Reported metrics reflect internal nested CV, not multi-center clinical validation.
+
+| Metric | Cross-Fitted Subject Estimate | 95% Bootstrap CI | Notes |
+| :--- | :---: | :---: | :--- |
+| **Balanced Accuracy** | **0.625** | [0.44 – 0.81] | Primary metric accounting for 3:1 class imbalance |
+| **ROC-AUC** | **0.740** | [0.55 – 0.90] | Discriminative capacity across thresholds |
+| **Sensitivity (Recall)** | **0.750** | [0.54 – 0.92] | True positive rate on PD subjects |
+| **Specificity** | **0.500** | [0.12 – 0.88] | True negative rate on healthy controls |
+| **Macro-F1** | **0.614** | [0.42 – 0.80] | Unweighted harmonic mean across classes |
+| **Brier Score** | **0.215** | [0.12 – 0.31] | Mean squared probability error |
+
+*Decision Threshold: An internal research threshold ($\approx 0.42$) selected to maximize out-of-fold balanced accuracy. It is a statistical research parameter, not a clinical operating cutoff.*
+
+---
+
+## 6. Inference Guardrails
+
+- **Training-Range Plausibility Warnings:** Compares input features against observed training 1st–99th percentiles ($P_1, P_{99}$). If an input value falls outside this range, a `FEATURE_OUTSIDE_TRAINING_RANGE` warning is issued.
+- **Recording Count Warning:** Emits a warning when fewer recordings than the training protocol are supplied for a subject.
+- **Target Status Rejection:** Inference APIs reject inputs containing the training label `status` (`HTTP 422`).
+
+---
+
+## 7. Limitations
+
+1. **Small Cohort Size:** Only 32 individuals (8 controls). Sub-cohorts in cross-validation folds have few control patients, leading to substantial metric uncertainty.
+2. **No Demographic Covariates:** The UCI dataset lacks age, biological sex, recording hardware, and acquisition site details. Fairness across demographic groups cannot be audited.
+3. **No External Cohort Validation:** Not validated on independent datasets (e.g., PC-GITA, mPower) due to measurement protocol variations.
+4. **Artifact Security:** Models are serialized using `joblib`. Artifacts should only be loaded from trusted local sources.

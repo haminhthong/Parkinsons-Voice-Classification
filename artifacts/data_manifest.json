@@ -1,6 +1,5 @@
 {
   "dataset": "UCI Parkinsons",
-  "dataset_sha256": "32e6040916d2f5b80b49589d925a92bd25420687c76be19d72e37205e104abe6",
   "n_recordings": 195,
   "n_subjects": 32,
   "subject_distribution": {

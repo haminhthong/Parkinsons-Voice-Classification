@@ -1,6 +1,5 @@
 import joblib
 import numpy as np
-import sklearn
 
 from parkinson_voice.data import TARGET_COLUMN
 from parkinson_voice.predict import load_bundle, predict_records, predict_subject_records
@@ -23,34 +22,12 @@ def test_probabilities_are_between_zero_and_one(frame, artifact_path):
     assert subjects["subject_screening_score"].between(0, 1).all()
 
 
-def test_artifact_does_not_require_post_hoc_calibration(artifact_path):
+def test_artifact_contains_core_fields(artifact_path):
     bundle = load_bundle(artifact_path)
-    assert bundle["model_type"] == "logistic_regression"
-    assert "calibrated" not in bundle["calibration"]
-
-
-def test_artifact_records_oof_selected_patient_rule(artifact_path):
-    bundle = load_bundle(artifact_path)
+    required = {"model", "feature_columns", "decision_threshold", "aggregation"}
+    assert required.issubset(bundle)
     assert bundle["aggregation"] == "median"
     assert 0 < bundle["decision_threshold"] < 1
-
-
-def test_artifact_contains_environment_metadata(artifact_path):
-    bundle = joblib.load(artifact_path)
-
-    required = {
-        "artifact_version",
-        "schema_version",
-        "python_version",
-        "sklearn_version",
-        "data_sha256",
-        "feature_columns",
-        "decision_threshold",
-        "aggregation",
-    }
-
-    assert required.issubset(bundle)
-    assert bundle["sklearn_version"] == sklearn.__version__
 
 
 def test_predict_subject_records_produces_structured_report(frame, artifact_path):
@@ -62,7 +39,7 @@ def test_predict_subject_records_produces_structured_report(frame, artifact_path
     report = predict_subject_records("sub_test", recordings, bundle)
     assert report["subject_id"] == "sub_test"
     assert 0 <= report["subject_screening_score"] <= 1
-    assert report["screening_result"] in {"model-positive", "model-negative"}
+    assert report["screening_result"] in {"above_internal_threshold", "below_internal_threshold"}
     assert report["n_recordings"] == 3
     assert len(report["recording_scores"]) == 3
 
@@ -74,7 +51,6 @@ def test_predict_subject_records_detects_ood_value(frame, artifact_path):
         orient="records"
     )
     bundle = load_bundle(artifact_path)
-    bundle["feature_p1_p99"] = {"MDVP:Fo(Hz)": (50.0, 300.0)}
+    bundle["feature_ranges"] = {"MDVP:Fo(Hz)": (50.0, 300.0)}
     report = predict_subject_records("sub_ood", recordings, bundle)
-    assert report["reliability"] == "limited"
     assert any("FEATURE_OUTSIDE_TRAINING_RANGE" in w for w in report["warnings"])

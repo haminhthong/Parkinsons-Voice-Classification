@@ -1,8 +1,7 @@
-"""Feature contract và pipeline production của dự án.
+"""Quản lý đặc trưng âm học và xây dựng pipeline phân loại.
 
-Hai cột dẫn xuất được loại bỏ vì quan hệ đại số tất định. Đây là xử lý dư thừa
-đặc trưng, không phải biện pháp chống leakage. Production v1 chỉ chuẩn hóa 20
-đặc trưng rồi huấn luyện Logistic Regression có regularization L2.
+Hai cột dẫn xuất (Jitter:DDP, Shimmer:DDA) được loại bỏ vì phụ thuộc đại số tất định.
+Mô hình chuẩn hóa 20 đặc trưng độc lập rồi huấn luyện Logistic Regression L2.
 """
 
 from __future__ import annotations

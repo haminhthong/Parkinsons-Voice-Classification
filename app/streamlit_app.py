@@ -32,7 +32,7 @@ st.markdown(
     "Tải lên tệp CSV chứa cột `name` và 20 hoặc 22 đặc trưng tần số/biên độ giọng nói từ UCI. "
     "**Lưu ý:** Hệ thống nhận bảng đặc trưng âm học số, **không nhận audio thô (WAV/MP3)**. "
     "Mô hình chỉ tạo **screening score từng recording**, sau đó **gộp median theo subject** "
-    "và hiển thị cảnh báo training-range cùng độ tin cậy."
+    "và hiển thị cảnh báo dải đo huấn luyện (nếu có)."
 )
 
 
@@ -52,12 +52,12 @@ if uploaded_file is not None:
 
     st.success(
         f"✅ Đã xử lý thành công {len(record_results)} bản ghi âm của "
-        f"{len(subject_results)} subject bằng mô hình **{bundle['champion_name']}**."
+        f"{len(subject_results)} subject bằng mô hình **Logistic Regression (L2)**."
     )
     st.caption(
-        " Quy tắc gộp được khóa từ OOF Train: "
+        " Quy tắc gộp từ OOF Train: "
         f"Phương pháp gộp `{bundle['aggregation']}`, "
-        f"Ngưỡng sàng lọc `{float(bundle['decision_threshold']):.3f}`."
+        f"Ngưỡng nội bộ `{float(bundle['decision_threshold']):.2f}`."
     )
 
     st.subheader("📊 Kết quả Sàng lọc theo Bệnh nhân (Subject-Level)")

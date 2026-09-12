@@ -21,7 +21,6 @@ from parkinson_voice.data import (
     load_data,
 )
 from parkinson_voice.features import MODEL_FEATURES
-from parkinson_voice.utils import sha256_file
 
 PROJECT_ROOT = Path(__file__).parents[2]
 DATA_PATH = PROJECT_ROOT / "data" / "parkinsons.csv"
@@ -46,7 +45,6 @@ def build_data_manifest(frame: pd.DataFrame, data_path: str | Path) -> dict:
 
     return {
         "dataset": "UCI Parkinsons",
-        "dataset_sha256": sha256_file(data_path),
         "n_recordings": int(len(frame)),
         "n_subjects": int(frame[SUBJECT_COLUMN].nunique()),
         "subject_distribution": _subject_class_distribution(frame),

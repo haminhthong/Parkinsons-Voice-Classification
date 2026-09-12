@@ -13,6 +13,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+
 from app.settings import ARTIFACT_PATH  # noqa: E402
 from parkinson_voice.predict import load_bundle, predict_records  # noqa: E402
 

@@ -46,7 +46,7 @@ def test_recording_has_score_only_and_subject_gets_decision(frame, artifact_path
         .to_dict(orient="records")
     )
     result = predict_subject_records("subject-test", recordings, bundle)
-    assert result["screening_result"] in {"model-positive", "model-negative"}
+    assert result["screening_result"] in {"above_internal_threshold", "below_internal_threshold"}
     assert len(result["recording_scores"]) == 2
     assert "predicted_status" not in result
 

@@ -58,21 +58,10 @@ def create_portfolio_figures(
     if "Aggregation" not in threshold_search.columns:
         threshold_search["Aggregation"] = "median"
     raw_metrics = json.loads((artifact_dir / "metrics.json").read_text(encoding="utf-8"))
-    release_metadata_path = artifact_dir / "releases" / "v1.0.0" / "metadata.json"
-    release_metadata = (
-        json.loads(release_metadata_path.read_text(encoding="utf-8"))
-        if release_metadata_path.exists()
-        else {}
-    )
-    decision_threshold = float(
-        release_metadata.get(
-            "decision_threshold",
-            raw_metrics.get("deployment_oof", {}).get("decision_threshold", 0.5),
-        )
-    )
+    decision_threshold = float(raw_metrics.get("deployment_oof", {}).get("decision_threshold", 0.5))
     stability = pd.DataFrame(
         {
-            "Feature": ["20 model features (fixed contract)"],
+            "Feature": ["20 model features (deterministic redundancy removed)"],
             "Contract frequency": [1.0],
         }
     )

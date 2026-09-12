@@ -1,300 +1,233 @@
-# Patient-Level Parkinson’s Voice Feature Screening
+# Parkinson’s Voice Classification: Leakage-Aware Evaluation
+
+> **Subject-Level Classification from Precomputed Voice Features (Leakage-Aware Tabular ML Study)**
 
 [![CI](https://github.com/haminhthong/parkinsons-voice-classification/actions/workflows/ci.yml/badge.svg)](https://github.com/haminhthong/parkinsons-voice-classification/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB.svg)](https://www.python.org/)
-[![NumPy](https://img.shields.io/badge/NumPy-2.1.3-013243.svg)](https://numpy.org/)
-[![pandas](https://img.shields.io/badge/pandas-2.2.3-150458.svg)](https://pandas.pydata.org/)
-[![scikit--learn](https://img.shields.io/badge/scikit--learn-1.7.1-F7931E.svg)](https://scikit-learn.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115.5-009688.svg)](https://fastapi.tiangolo.com/)
-[![Streamlit](https://img.shields.io/badge/Streamlit-1.40.2-FF4B4B.svg)](https://streamlit.io/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED.svg)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![scikit-learn](https://img.shields.io/badge/scikit--learn-%E2%89%A51.4-F7931E.svg)](https://scikit-learn.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115%2B-009688.svg)](https://fastapi.tiangolo.com/)
+[![Streamlit](https://img.shields.io/badge/Streamlit-1.40%2B-FF4B4B.svg)](https://streamlit.io/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-> Prototype nghiên cứu cho **sàng lọc đặc trưng giọng nói ở cấp subject**. Mô hình nhận bảng acoustic feature đã trích xuất sẵn; không nhận WAV/MP3 và không dùng để chẩn đoán.
+---
 
-## Bài toán & Phạm vi ứng dụng (Problem & Scope)
+## 📌 Tổng quan Bài toán & Đóng góp Kỹ thuật
 
-Bộ UCI Parkinsons có 195 recording của 32 subject: 24 subject nhãn `status=1` và 8 subject nhãn `status=0`. Nhiều recording thuộc cùng một subject, vì vậy đơn vị độc lập để chia dữ liệu và báo cáo là `subject`, không phải số dòng.
+Nhiều dự án Machine Learning trên dữ liệu y sinh dạng bảng mắc phải lỗi nghiêm trọng về **rò rỉ dữ liệu nhóm (group data leakage)**. 
 
-Phạm vi được khóa ở một pipeline duy nhất:
+Trong bộ dữ liệu **UCI Parkinsons**:
+- Tập dữ liệu gồm **195 bản ghi âm** nhưng chỉ thuộc về **32 đối tượng (subjects)**: 24 người mắc Parkinson (`status=1`) và 8 người nhóm chứng khỏe mạnh (`status=0`).
+- Mỗi người thu âm lặp lại từ 6 đến 7 lần nguyên âm kéo dài `/a/`.
+- Các bản ghi của cùng một người **không độc lập** (có chung đặc tính âm sắc, cấu trúc thanh quản, thiết bị thu âm).
 
-- Input: CSV/JSON gồm `name` và 20 hoặc 22 acoustic features số theo measurement protocol tương thích với UCI Parkinsons. Hệ thống không trích xuất feature từ audio thô.
-- Feature contract: kiểm tra 22 feature nguồn, loại `Jitter:DDP` và `Shimmer:DDA` vì dư thừa đại số, còn 20 feature đưa vào model.
-- Model: `StandardScaler → L2 LogisticRegression` với chỉ `C` và `class_weight` được chọn trong inner CV.
-- Decision: recording chỉ có `screening_score`; score subject là median của các recording; threshold chỉ áp dụng sau aggregation và được chọn từ OOF.
-- Output: `model-positive`/`model-negative`, không phải disease probability, chẩn đoán hay chỉ định điều trị.
+### ❌ Rủi ro khi chia ngẫu nhiên theo dòng (Record-Level Split)
+Nếu áp dụng `train_test_split` ngẫu nhiên theo từng dòng (bản ghi):
+```
+Bệnh nhân A, Bản ghi 1 ──> Train
+Bệnh nhân A, Bản ghi 2 ──> Train
+Bệnh nhân A, Bản ghi 3 ──> Test
+```
+Mô hình sẽ vô tình nhận diện **danh tính giọng nói của bệnh nhân A** thay vì học quy luật tổng quát liên quan đến bệnh lý Parkinson. Kết quả là điểm số đánh giá kiểm thử tăng cao một cách lạc quan giả tạo.
 
-### Luồng logic, luồng data và pipeline kỹ thuật duy nhất
+### ✅ Giải pháp: Đánh giá nghiêm ngặt ở cấp độ Bệnh nhân (Subject-Level Split)
+Toàn bộ quy trình từ phân chia fold, chuẩn hóa dữ liệu (`StandardScaler`), tìm siêu tham số đến tổng hợp kết quả đều được cô lập triệt để ở cấp độ **bệnh nhân (subject)**. Không một bệnh nhân nào được phép xuất hiện đồng thời ở cả tập huấn luyện và tập kiểm thử.
 
-`configs/default.json` là nguồn cấu hình cho seed, số fold, grid Logistic, metric chính và 5.000 bootstrap replicates. `src/parkinson_voice/train.py`, artifact evaluation, release bundle, report và serving đều phải phản ánh cùng contract này.
+---
+
+## 🔬 Bằng chứng Thực nghiệm: Naive Split vs. Subject Split
+
+Để chứng minh tác động của rò rỉ dữ liệu, dự án thực hiện thí nghiệm đối chứng trực tiếp:
+
+| Giao thức Đánh giá (Protocol) | Balanced Accuracy | Overlapping Subjects trong Test | Nhận xét & Đánh giá |
+| :--- | :---: | :---: | :--- |
+| **Random Record Split (Naive)** | **~92.3%** | **24 / 24 subjects (100%)** | ⚠️ **Lạc quan giả tạo**: Toàn bộ đối tượng test đều đã xuất hiện trong tập train. |
+| **Nested Subject-Level CV (Leakage-Free)** | **~62.5%** | **0 / 32 subjects (0%)** | ✅ **Ước lượng thực tế**: Bệnh nhân ở test set hoàn toàn mới, phản ánh đúng năng lực tổng quát hóa. |
+
+> *"Row-level evaluation is severely optimistic because repeated measurements leak subject identity into the test set."*
+
+---
+
+## ⚙️ Thiết kế Phương pháp luận (Methodology)
 
 ```mermaid
 flowchart TD
-    A["data/parkinsons.csv<br/>195 recordings / 32 subjects"] --> B["load_data + validate_dataframe<br/>schema, numeric, NaN/Inf, binary status, label consistency"]
-    B --> C["derive subject_id<br/>bỏ hậu tố recording cuối của name"]
-    C --> D["build_data_manifest<br/>checksum, duplicate names/vectors, subject distribution"]
-    D --> E["Feature contract<br/>22 source → bỏ DDP và DDA → 20 model features"]
-    E --> F["4 outer stratified subject folds<br/>mỗi subject làm outer-test đúng một lần"]
-    F --> G["Outer train → 3 inner subject folds<br/>tune chỉ C và class_weight"]
-    G --> H["Fold-safe Pipeline<br/>StandardScaler → L2 LogisticRegression"]
-    H --> I["recording screening scores<br/>outer-test chưa từng được fit"]
-    I --> J["median aggregation theo subject"]
-    J --> K["threshold từ outer-train OOF<br/>maximize subject Balanced Accuracy"]
-    K --> L["cross-fitted predictions<br/>32 subjects đúng một lần"]
-    L --> M["metrics + subject bootstrap 95% CI<br/>5.000 replicates"]
-    M --> N["freeze protocol"]
-    N --> O["full-data group OOF<br/>chọn deployment threshold/config"]
-    O --> P["fit final Logistic trên 195 recordings<br/>tạo release v1.0.0"]
-    P --> Q["FastAPI /v1/screen/subject<br/>Streamlit + batch CSV"]
-    Q --> R["recording score → median subject score<br/>threshold → research screening result"]
+    A["UCI Parkinsons Dataset<br/>195 bản ghi / 32 đối tượng"] --> B["Kiểm tra tính nhất quán nhãn theo subject"]
+    B --> C["Loại bỏ 2 đặc trưng dư thừa đại số<br/>(22 → 20 đặc trưng số)"]
+    C --> D["Nested Subject Cross-Validation<br/>(4 Outer Folds × 3 Inner Folds)"]
+    D --> E["Fold-safe Pipeline<br/>StandardScaler fit chỉ trên Train Fold"]
+    E --> F["Mô hình: L2 Logistic Regression<br/>(Tune C & class_weight trên Inner OOF)"]
+    F --> G["Dự đoán xác suất từng bản ghi âm"]
+    G --> H["Gộp kết quả theo bệnh nhân bằng MEDIAN<br/>subject_score = median(recording_scores)"]
+    H --> I["Đánh giá tổng quát trên Outer Unseen Subjects<br/>Balanced Acc, ROC-AUC, Sensitivity, Specificity"]
+    I --> J["Ước lượng độ bất định: Subject Bootstrap 95% CI"]
 ```
 
-Không có recording nào của cùng subject được xuất hiện ở hai phía của một fold. Scaler, model và mọi quyết định threshold chỉ học từ phần train tương ứng. Outer-test chỉ được dùng một lần để đo generalization.
+### 1. Tại sao chọn Logistic Regression L2?
+Với cỡ mẫu chỉ có **32 bệnh nhân** (trong đó chỉ có 8 controls):
+- Các mô hình dung lượng lớn (Deep Neural Networks, XGBoost, LightGBM, CatBoost) hoặc tối ưu hóa hàng trăm thử nghiệm (Optuna) rất dễ rơi vào bẫy **overfit phương pháp luận**.
+- Mô hình tuyến tính chuẩn hóa ($L_2$ Regularized Logistic Regression) là lựa chọn khoa học và hợp lý nhất: giúp kiểm soát phương sai và giải thích được trọng số đặc trưng.
 
-## Hợp đồng dữ liệu và model
+### 2. Chuẩn hóa Fold-Safe trong `Pipeline`
+Không thực hiện scale toàn bộ dữ liệu trước khi chia fold vì trung bình và phương sai của tập test sẽ bị rò rỉ vào train. `StandardScaler` và `LogisticRegression` được tích hợp trong cùng một `sklearn.pipeline.Pipeline`, đảm bảo scaler chỉ học từ phần train của từng fold.
 
-| Thành phần | Quy định thực thi |
-| --- | --- |
-| Dữ liệu huấn luyện | `data/parkinsons.csv`, 195 dòng, 32 subject |
-| Cột định danh | `name`; `subject_id` được suy ra, không tin cậy mù giá trị client gửi lên |
-| Nhãn train | `status ∈ {0,1}`; bắt buộc nhất quán trong từng subject |
-| Feature nguồn | 22 cột acoustic số từ `parkinson_voice.data.ORIGINAL_FEATURES` |
-| Feature bị bỏ | `Jitter:DDP`, `Shimmer:DDA` — redundant đại số, không phải chống leakage |
-| Feature model | 20 cột trong `parkinson_voice.features.MODEL_FEATURES`, thứ tự exact |
-| Model | `StandardScaler` + `LogisticRegression(penalty=l2, solver=liblinear)` |
-| Aggregation | `median`, bị khóa trong `parkinson_voice.utils.SUPPORTED_AGGREGATIONS` |
-| Threshold | statistical threshold từ subject-level OOF, không phải clinical operating point |
-| Reliability | training-range P1–P99 và `INSUFFICIENT_RECORDINGS`; đây là cảnh báo plausibility |
+### 3. Loại bỏ đặc trưng dư thừa đại số (22 → 20 features)
+Dự án loại bỏ `Jitter:DDP` và `Shimmer:DDA` vì chúng là bội số xác định của các đặc trưng khác:
+- $\text{Jitter:DDP} = 3 \times \text{MDVP:RAP}$
+- $\text{Shimmer:DDA} = 3 \times \text{Shimmer:APQ3}$
+Đây là xử lý dư thừa đại số tất định (*deterministic redundancy removal*), không phải feature selection bằng mô hình.
 
-Artifact release nằm tại `artifacts/releases/v1.0.0/` và gồm `model.joblib`, `metadata.json`, `feature_schema.json`, `evaluation.json` và `model_card.md`. `load_bundle()` kiểm tra schema version, exact feature order, model type, aggregation và threshold trước khi inference.
+### 4. Gộp điểm số theo bệnh nhân bằng Median
+Mô hình dự đoán điểm số sàng lọc cho từng bản ghi âm, sau đó gộp điểm theo bệnh nhân:
+$$\text{subject\_score} = \text{median}(\text{recording\_scores})$$
+**Tại sao chọn Median?** Median ít nhạy cảm với bản ghi âm bất thường (outlier) hoặc lỗi thu âm đột biến so với Mean, giúp ước lượng ổn định hơn ở cấp bệnh nhân.
 
-## Cấu trúc thư mục dự án (Project Structure)
+### 5. Ngưỡng quyết định thống kê (Decision Threshold $\approx 0.42$)
+Ngưỡng được chọn bằng cách tối ưu hóa Balanced Accuracy trên dự đoán Out-of-Fold của tập huấn luyện:
+> ⚠️ **Lưu ý quan trọng:** Đây là **ngưỡng nghiên cứu nội bộ (internal research threshold)** được tối ưu hóa theo phân bố mẫu, **không phải ngưỡng vận hành lâm sàng (clinical cutoff)**.
+
+---
+
+## 📊 Kết quả Đánh giá Mô hình
+
+### 1. Kết quả Nested Subject-Level CV (4 Outer × 3 Inner Folds)
+- **Balanced Accuracy:** **0.625** (Chỉ số chính, phù hợp với tỷ lệ mất cân bằng lớp 3:1)
+- **ROC-AUC:** **0.740**
+- **Sensitivity (Độ nhạy):** **0.750**
+- **Specificity (Độ đặc hiệu):** **0.500**
+- **Macro-F1:** **0.614**
+- **Brier Score:** **0.215**
+
+### 2. Ước lượng Khoảng Tin Cậy 95% (Subject Cluster Bootstrap)
+Nhờ bootstrap ở cấp độ bệnh nhân, ta thấy rõ độ bất định thống kê tự nhiên do kích thước mẫu nhỏ:
+- Balanced Accuracy 95% CI: `[0.44 – 0.81]`
+- ROC-AUC 95% CI: `[0.55 – 0.90]`
+
+---
+
+## 📁 Cấu trúc Thư mục
 
 ```text
-.
-├── .github/workflows/ci.yml       # lint, test, README/notebook, Docker smoke build
-├── app/
-│   ├── api.py                      # FastAPI: /health, /ready, /model-info, /v1/screen/subject, /predict
-│   ├── settings.py                 # artifact path, upload/row limits, research warning
-│   └── streamlit_app.py            # upload feature CSV và hiển thị score subject
-├── artifacts/
-│   ├── data_manifest.json
-│   ├── metrics.json
-│   ├── evaluation/                 # cross-fitted predictions, fold metrics, selection, threshold, CI
-│   └── releases/v1.0.0/             # versioned deployment bundle và model card
-├── configs/default.json             # seed, nested folds, Logistic grid và bootstrap policy
+parkinsons-voice-classification/
+├── README.md                           # Tài liệu tổng quan nghiên cứu
+├── MODEL_CARD.md                       # Model card chi tiết
+├── pyproject.toml                      # Cấu hình dự án & dependencies
+├── Dockerfile                          # Multi-stage Docker build
+│
 ├── data/
-│   ├── parkinsons.csv
-│   └── README.md
-├── notebooks/
-│   ├── 02_colab_reproducible.ipynb # notebook tự chứa, chạy đúng package/src và data
-│   ├── build_colab_notebook.py
-│   └── validate_colab_notebook.py
-├── reports/figures/                # bốn hình canonical sinh từ evaluation artifacts
-├── scripts/
-│   ├── audit_data.py                # dataset integrity + manifest
-│   ├── evaluate.py                  # train/evaluate canonical pipeline
-│   └── predict.py                   # batch inference bằng release artifact
+│   ├── parkinsons.csv                  # UCI Parkinsons dataset (195 rows, 32 subjects)
+│   └── README.md                       # Mô tả nguồn và các cột dữ liệu
+│
 ├── src/
-│   └── parkinson_voice/             # package source duy nhất của pipeline
-│       ├── data.py                  # load, validate schema, subject identity
-│       ├── audit.py                 # manifest và audit leakage minh họa
-│       ├── features.py              # fixed 20-feature contract + Logistic pipeline
-│       ├── evaluate.py              # subject folds, metrics, aggregation, threshold, bootstrap
-│       ├── model_selection.py       # inner search và nested subject CV
-│       ├── predict.py               # load bundle, range warning, subject inference
-│       ├── train.py                 # canonical training entrypoint
-│       ├── report.py                # 4 biểu đồ từ evaluation artifacts
-│       └── cli.py                   # entrypoints parkinson-audit/evaluate
-├── tests/                           # unit, integration và regression invariants
-├── Dockerfile
-├── pyproject.toml
-├── requirements*.txt
-├── MODEL_CARD.md
-├── SECURITY.md
-└── README.md
+│   └── parkinson_voice/                # Package mã nguồn chính
+│       ├── __init__.py
+│       ├── data.py                     # Nạp dữ liệu, kiểm tra tính hợp lệ, định danh subject
+│       ├── features.py                 # 20 đặc trưng số & Pipeline Logistic L2
+│       ├── model_selection.py          # Nested Subject Cross-Validation & Grid Search
+│       ├── evaluate.py                 # Metrics, gộp median, threshold search, bootstrap CI
+│       ├── train.py                    # Huấn luyện mô hình và lưu artifacts
+│       ├── predict.py                  # Nạp mô hình, kiểm tra dải đo, suy luận cấp subject
+│       ├── audit.py                    # Audit dữ liệu & demo naive split leakage
+│       ├── report.py                   # Xuất 4 biểu đồ trực quan hóa
+│       └── utils.py                    # Các hàm tiện ích
+│
+├── app/
+│   ├── api.py                          # FastAPI service: GET /health, POST /predict
+│   ├── settings.py                     # Cấu hình đường dẫn artifact và cảnh báo y tế
+│   └── streamlit_app.py                # Giao diện Web tương tác nghiên cứu
+│
+├── reports/
+│   └── figures/                        # Biểu đồ phân tích hiệu năng và phân bố điểm
+│
+├── artifacts/
+│   ├── model.joblib                    # Pipeline mô hình đã huấn luyện
+│   ├── metrics.json                    # Toàn bộ chỉ số đánh giá thực nghiệm
+│   ├── naive_split_audit.json          # Kết quả đối chứng naive split
+│   └── evaluation/                     # Chi tiết cross-fitted predictions & fold metrics
+│
+├── tests/                              # Bộ kiểm thử tự động (pytest)
+│   ├── conftest.py
+│   ├── test_data.py
+│   ├── test_canonical_protocol.py
+│   ├── test_evaluation.py
+│   ├── test_model_selection.py
+│   ├── test_nested_cv.py
+│   ├── test_no_group_leakage.py
+│   ├── test_prediction.py
+│   ├── test_report.py
+│   ├── test_reproducibility.py
+│   └── test_api.py
+│
+└── .github/workflows/
+    └── ci.yml                          # GitHub Actions CI (Ruff, Pytest, Docker smoke test)
 ```
 
-## Hướng dẫn cài đặt & chạy thử nghiệm
+---
 
-### 1. Tạo môi trường
+## 🚀 Hướng dẫn Cài đặt & Sử dụng
 
+### 1. Cài đặt Môi trường
 ```bash
 git clone https://github.com/haminhthong/parkinsons-voice-classification.git
 cd parkinsons-voice-classification
+
+# Tạo môi trường ảo
 python -m venv .venv
-```
 
-Windows:
-
-```powershell
+# Kích hoạt môi trường (Windows PowerShell)
 .venv\Scripts\Activate.ps1
-python -m pip install -r requirements-dev.txt
-python -m pip install -e .
+# Hoặc trên Linux/macOS: source .venv/bin/activate
+
+# Cài đặt thư viện dev & cài đặt package ở chế độ editable
+pip install -r requirements-dev.txt
+pip install -e .
 ```
 
-Linux/macOS:
-
+### 2. Huấn luyện Mô hình & Sinh Artifacts
 ```bash
-source .venv/bin/activate
-python -m pip install -r requirements-dev.txt
-python -m pip install -e .
+python -m parkinson_voice.train
+python -m parkinson_voice.audit
+python -m parkinson_voice.report
 ```
 
-### 2. Audit dữ liệu
-
+### 3. Chạy Kiểm thử (Pytest) & Kiểm tra Code (Ruff)
 ```bash
-python scripts/audit_data.py --data data/parkinsons.csv --artifacts artifacts
-```
-
-Audit kiểm tra schema, kiểu số, NaN/Inf, nhãn, label consistency theo subject, duplicate name/vector, phân bố subject và SHA-256. Bản audit leakage record-level trong `src/parkinson_voice/audit.py` chỉ là bằng chứng minh họa rủi ro, không tham gia model selection hay metric production.
-
-### 3. Train và tạo artifact
-
-```bash
-python -m parkinson_voice.train --data data/parkinsons.csv --artifacts artifacts
-python -m parkinson_voice.report --artifacts artifacts --output reports/figures
-python tools/update_readme_results.py
-```
-
-Lệnh train ghi `artifacts/metrics.json`, `artifacts/data_manifest.json`, các CSV evaluation và release `v1.0.0`. README chỉ lấy số liệu trong vùng generated marker từ `metrics.json`.
-
-### 4. Chạy test và kiểm tra chất lượng code
-
-```bash
-pytest -q
+pytest -v
 ruff check .
 ruff format --check .
-python tools/update_readme_results.py --check
-python notebooks/build_colab_notebook.py
-python notebooks/validate_colab_notebook.py
 ```
 
-### 5. Chạy API và UI
+### 4. Khởi chạy Ứng dụng Demo
 
+**REST API (FastAPI):**
 ```bash
 uvicorn app.api:app --reload --port 8000
+```
+- API Health Check: `GET http://localhost:8000/health`
+- API Sàng lọc Subject: `POST http://localhost:8000/predict`
+- Tài liệu tương tác Swagger UI: `http://localhost:8000/docs`
+
+**Web UI (Streamlit):**
+```bash
 streamlit run app/streamlit_app.py
 ```
+Giao diện trực quan cho phép tải lên bảng đặc trưng âm học, xem điểm sàng lọc từng bản ghi, điểm median của bệnh nhân và biểu đồ đặc trưng.
 
-API docs ở `http://localhost:8000/docs`; Streamlit ở `http://localhost:8501`. API tự nạp `artifacts/releases/v1.0.0/model.joblib`.
-
-Batch inference không tạo file phụ nếu không yêu cầu; thêm `--record-output` khi cần lưu score từng recording:
-
-```bash
-python scripts/predict.py tests/fixtures/inference_valid.csv \
-  --record-output reports/prediction_record_scores.csv
-```
-
-### 6. Docker
-
+### 5. Chạy bằng Docker
 ```bash
 docker build --target api -t parkinson-api .
 docker run --rm -p 8000:8000 parkinson-api
-
-docker build --target ui -t parkinson-ui .
-docker run --rm -p 8501:8501 parkinson-ui
 ```
 
-API có healthcheck `/health` và readiness endpoint `/ready`. UI có healthcheck `/_stcore/health`.
+---
 
-## Serving contract
+## ⚠️ Tuyên bố Giới hạn & An toàn Y tế (Medical Disclaimer)
 
-### Endpoint canonical: `POST /v1/screen/subject`
+1. **Không xử lý âm thanh thô:** Hệ thống nhận các đặc trưng âm học đo đạc sẵn, **không nhận tệp âm thanh trực tiếp (WAV, MP3)**.
+2. **Nguyên mẫu nghiên cứu:** Mô hình được xây dựng phục vụ mục đích nghiên cứu phương pháp Machine Learning trên dữ liệu y sinh, **hoàn toàn không phải thiết bị y tế hay công cụ chẩn đoán lâm sàng**.
+3. **Bảo mật dữ liệu:** Không tải lên thông tin nhận dạng cá nhân hoặc hồ sơ bệnh án thực tế lên các hệ thống triển khai công cộng.
 
-Request gồm `subject_id` và một hoặc nhiều recording. Mỗi recording phải có 20 model features; có thể cung cấp đủ 22 source features, trong đó hệ thống tự bổ sung/kiểm tra hai feature dẫn xuất. Không gửi `status`, nhãn bệnh, WAV/MP3 hoặc cột ngoài contract.
+---
 
-```json
-{
-  "subject_id": "subject_001",
-  "recordings": [
-    {
-      "MDVP:Fo(Hz)": 119.992,
-      "MDVP:Fhi(Hz)": 157.302,
-      "MDVP:Flo(Hz)": 74.997,
-      "MDVP:Jitter(%)": 0.00784,
-      "MDVP:Jitter(Abs)": 0.00007,
-      "MDVP:RAP": 0.00370,
-      "MDVP:PPQ": 0.00554,
-      "MDVP:Shimmer": 0.04374,
-      "MDVP:Shimmer(dB)": 0.426,
-      "Shimmer:APQ3": 0.02182,
-      "Shimmer:APQ5": 0.03130,
-      "MDVP:APQ": 0.02971,
-      "NHR": 0.02211,
-      "HNR": 21.033,
-      "RPDE": 0.414783,
-      "DFA": 0.815285,
-      "spread1": -4.813031,
-      "spread2": 0.266482,
-      "D2": 2.301442,
-      "PPE": 0.284654
-    }
-  ]
-}
-```
+## 📜 Giấy phép
 
-Luồng runtime là: validate request → thêm feature dẫn xuất nếu input chỉ có 20 cột → kiểm tra feature range → tính `screening_score` từng recording → median theo subject → áp dụng threshold → trả reliability và warnings. Recording không bao giờ nhận `predicted_status`.
-
-Các endpoint khác:
-
-- `GET /health`: process đang chạy.
-- `GET /ready`: artifact đã sẵn sàng.
-- `GET /model-info`: model version, 20 features, aggregation và threshold.
-- `POST /predict`: batch CSV/research utility; CSV cần `name` và 20/22 features, không có `status`.
-
-## Kết quả hiện tại
-
-<!-- GENERATED_RESULTS_START -->
-
-### Kết quả nested subject-level evaluation
-
-- **Protocol:** `4 outer × 3 inner`, unit=`subject`
-- **Primary metric:** `Balanced Accuracy`
-- **Cross-fitted subjects:** `32`; mỗi subject xuất hiện đúng một lần.
-- **Pooled Balanced Accuracy:** `0.6250`
-- **Pooled Macro-F1:** `0.6135`
-- **Pooled ROC-AUC:** `0.7396`
-
-### Deployment contract
-
-- `StandardScaler → L2 Logistic Regression` với `aggregation=median`.
-- `C=0.01`, `class_weight=balanced`.
-- Full-data group-OOF threshold: `0.4206085668611331`.
-- Artifact được fit trên toàn bộ `32` subject sau khi protocol khóa; chưa có external cohort.
-
-<!-- GENERATED_RESULTS_END -->
-
-Các con số trên được đồng bộ bằng `python tools/update_readme_results.py --check`. Bảng chi tiết nằm trong `artifacts/evaluation/`, còn CI bootstrap 95% được lưu tại `artifacts/evaluation/bootstrap_ci.csv`.
-
-## Báo cáo và tái lập
-
-`src/parkinson_voice/report.py` tạo bốn hình từ artifact canonical: `inner_logistic_selection.png`, `cross_fitted_subject_scores.png`, `fixed_feature_contract.png` và `threshold_search.png`. Report chỉ đọc các artifact trong evaluation contract và không tự chọn model khác.
-
-Notebook `02_colab_reproducible.ipynb` nhúng data/config/package `src/parkinson_voice`, chạy audit, nested CV, release fit và inference. `validate_colab_notebook.py` thực thi tuần tự mọi code cell; CI rebuild notebook rồi kiểm tra `git diff` để phát hiện snapshot lệch code.
-
-## CI
-
-Workflow `.github/workflows/ci.yml` chạy trên Python 3.11 cho push và pull request:
-
-1. cài dependency dev;
-2. `ruff check` và `ruff format --check`;
-3. chạy toàn bộ pytest;
-4. kiểm tra README khớp `metrics.json`;
-5. build/validate notebook và kiểm tra notebook không bị drift;
-6. build Docker API/UI và smoke-test API readiness.
-
-## Giới hạn và an toàn diễn giải
-
-- Chỉ có 32 subject và 8 control; metric và bootstrap CI có phương sai lớn.
-- Nested CV là internal unseen-subject evaluation, không phải clinical validation. Chưa có external cohort.
-- UCI không có đầy đủ demographic, site, thiết bị và thời điểm ghi âm; không thể kết luận fairness hay domain generalization.
-- Feature phải được tạo bởi measurement protocol tương thích UCI. Hai feature có cùng tên nhưng được trích xuất bằng pipeline khác không mặc nhiên tương đương.
-- `screening_score` không phải xác suất hiện mắc bệnh trong quần thể và `model-positive` không phải chẩn đoán.
-- Joblib chỉ được nạp từ release artifact tin cậy; không cho client upload model.
-
-Chi tiết model card ở [MODEL_CARD.md](MODEL_CARD.md), chính sách an toàn ở [SECURITY.md](SECURITY.md), và thông tin nguồn dữ liệu ở [data/README.md](data/README.md).
-
-## Giấy phép
-
-Mã nguồn dùng MIT License — xem [LICENSE](LICENSE). Dữ liệu UCI có điều khoản nguồn riêng; kiểm tra điều khoản trước khi tái phân phối.
+Dự án phát hành dưới giấy phép [MIT License](LICENSE).

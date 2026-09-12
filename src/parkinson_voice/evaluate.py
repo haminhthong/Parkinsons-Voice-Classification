@@ -275,7 +275,7 @@ def select_decision_threshold(
         ["Balanced Accuracy", "F1-macro", "Specificity", "distance_from_default"],
         ascending=[False, False, False, True],
     )
-    return float(ranked.iloc[0]["Threshold"]), table
+    return round(float(ranked.iloc[0]["Threshold"]), 4), table
 
 
 def expected_calibration_error(y_true, probabilities, *, n_bins: int = 5) -> float:
@@ -310,11 +310,11 @@ def expected_calibration_error(y_true, probabilities, *, n_bins: int = 5) -> flo
 
 
 def bootstrap_subject_confidence_intervals(
-    subjects: pd.DataFrame, *, n_bootstrap: int = 5000, random_state: int = 42
+    subjects: pd.DataFrame, *, n_bootstrap: int = 1000, random_state: int = 42
 ) -> pd.DataFrame:
     """Ước lượng Khoảng Tin Cậy 95% (95% CI) bằng Patient Cluster Bootstrap.
 
-    Thực hiện lấy mẫu có hoàn lại 5,000 lần ở cấp độ subject. Loại các mẫu
+    Thực hiện lấy mẫu có hoàn lại ở cấp độ subject. Loại các mẫu
     bootstrap không hợp lệ (mẫu chỉ chứa duy nhất 1 lớp nhãn).
 
     Args:
