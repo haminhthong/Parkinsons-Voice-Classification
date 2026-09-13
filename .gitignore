@@ -171,10 +171,10 @@ cython_debug/
 .ruff_cache/
 .mplconfig/
 reports/.pytest-cache/
-reports/.pytest-tmp/
-
 # Temporary directories when pytest is run with a short Windows path.
 pytest-tmp*/
+.pytest-runtime/
+
 
 # PyPI configuration file
 
